@@ -21,7 +21,7 @@ const USAGE = `zama-graph <command>
   names                                  ENS and GNS names, and contract names (with ETHERSCAN_API_KEY)
   check                                  consistency checks of the index
   decrypt [--limit n] [--dry]            ask Zama's relayer for publicly decryptable
-                                         values nobody decrypted yet (see README)
+                                         values nobody decrypted yet (ZAMA_RELAYER_API_KEY)
 `
 
 /** How often follow mode derives everything again */
