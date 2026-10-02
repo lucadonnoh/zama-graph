@@ -1,6 +1,6 @@
 # Builds the web UI and publishes it on GitHub Pages. The API it talks to runs
-# elsewhere (see deploy/README.md); the repository variable API_URL points
-# the UI at it.
+# elsewhere (see deploy/README.md); set the repository variable API_URL to
+# point the UI at another one.
 name: pages
 on:
   push:
@@ -29,7 +29,7 @@ jobs:
         uses: actions/configure-pages@v5
       - run: pnpm build:web --base=${{ steps.pages.outputs.base_path }}/
         env:
-          VITE_API_URL: ${{ vars.API_URL }}
+          VITE_API_URL: ${{ vars.API_URL || 'https://stillnot.slashveto.me' }}
       - uses: actions/upload-pages-artifact@v3
         with:
           path: dist/web
