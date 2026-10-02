@@ -131,7 +131,9 @@ export function serve(db: Db, config: Config): void {
       }
       res.set('cache-control', 'public, max-age=60').type('json').send(body)
     } catch (e) {
-      res.status(503).json({ error: String(e) })
+      // the detail stays in the log: it can name the RPC
+      log('token read failed', { token: a, error: String(e) })
+      res.status(503).json({ error: 'the Ethereum RPC is unavailable' })
     }
   })
 
