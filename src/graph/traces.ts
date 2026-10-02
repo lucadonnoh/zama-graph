@@ -5,6 +5,8 @@ import { type Ev, type Ledger, ZERO } from './model'
 
 /** Most transfers one history walk visits before it gives up */
 export const TRACE_LIMIT = 3000
+/** A linked unwrap's accounts and transactions are kept up to this many */
+const PATH_LIMIT = 500
 
 export interface History {
   /** event indices of the history, in time order */
@@ -230,6 +232,16 @@ export interface Trace {
   truncated: boolean
   cut: boolean
   events: number
+  /** the accounts its history went through */
+  accounts: string[]
+  /** the transactions of its history (ids), wraps included */
+  txs: number[]
+}
+
+/** Whether all of a withdrawal provably came from one depositor */
+export function linked(t: Trace): boolean {
+  const top = t.shares[0]
+  return !!top && t.lo > 0n && top.min === t.lo
 }
 
 /**
@@ -307,6 +319,8 @@ export function traceUnwrap(
     truncated: h.truncated,
     cut: h.cut,
     events: h.events.length,
+    accounts: [...h.accounts],
+    txs: [...new Set(h.events.map((i) => (ledger.events[i] as Ev).tx))],
   }
 }
 
@@ -362,6 +376,18 @@ export function deriveTraces(
     primary key (handle, depositor)
   )`)
   db.exec('create index if not exists share_depositor on share(depositor)')
+  // the accounts and transactions on the path of each linked withdrawal,
+  // so that their pages can show it
+  db.exec(`create table if not exists trace_account (
+    account text not null,
+    handle integer not null,      -- the unwrap
+    primary key (account, handle)
+  ) without rowid`)
+  db.exec(`create table if not exists trace_tx (
+    tx integer not null,
+    handle integer not null,      -- the unwrap
+    primary key (tx, handle)
+  ) without rowid`)
   const pools = memberPools(db)
   const modeOf = hubModes(hubs.values(), pools)
   const traces: Trace[] = []
@@ -373,6 +399,14 @@ export function deriveTraces(
   transaction(db, () => {
     db.exec('delete from trace')
     db.exec('delete from share')
+    db.exec('delete from trace_account')
+    db.exec('delete from trace_tx')
+    const insAccount = db.prepare(
+      'insert or ignore into trace_account (account, handle) values (?, ?)',
+    )
+    const insTx = db.prepare(
+      'insert or ignore into trace_tx (tx, handle) values (?, ?)',
+    )
     const ins = db.prepare(
       `insert into trace (handle, token, burner, receiver, time, lo, hi, origin, depositors, sender, sender_min, sender_max, hubs, events, truncated, cut, via)
        values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -401,6 +435,14 @@ export function deriveTraces(
         t.cut ? 1 : 0,
         t.via.join(','),
       )
+      if (
+        linked(t) &&
+        t.accounts.length <= PATH_LIMIT &&
+        t.txs.length <= PATH_LIMIT
+      ) {
+        for (const a of t.accounts) insAccount.run(a, t.handle)
+        for (const x of t.txs) insTx.run(x, t.handle)
+      }
       for (const s of t.shares.slice(0, 50)) {
         insShare.run(
           t.handle,

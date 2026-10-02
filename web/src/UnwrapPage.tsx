@@ -82,15 +82,21 @@ export function UnwrapPage({ handle }: { handle: string }) {
       </section>
       <Flow d={d} />
       {d.shares.length > 1 && <Shares d={d} />}
-      {d.graph && d.graph.edges.length > 1 && (
-        <Section
-          title="History"
-          note={`every transfer that can have funded it${d.graph.truncated ? ', newest part' : ''}`}
-        >
-          <HistoryGraph graph={d.graph} />
-        </Section>
-      )}
+      <History d={d} />
     </>
+  )
+}
+
+/** Every transfer that can have funded the withdrawal, as a graph */
+export function History({ d }: { d: UnwrapDetail }) {
+  if (!d.graph || d.graph.edges.length <= 1) return null
+  return (
+    <Section
+      title="History"
+      note={`every transfer that can have funded it${d.graph.truncated ? ', newest part' : ''}`}
+    >
+      <HistoryGraph graph={d.graph} />
+    </Section>
   )
 }
 
@@ -155,7 +161,7 @@ function sources(d: UnwrapDetail): Source[] {
  * to the withdrawal, solid for what the data proves came from it, faint
  * for what only might have.
  */
-function Flow({ d }: { d: UnwrapDetail }) {
+export function Flow({ d }: { d: UnwrapDetail }) {
   useLabels()
   const t = d.trace
   if (!t) {

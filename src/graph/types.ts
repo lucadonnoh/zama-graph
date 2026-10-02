@@ -241,15 +241,34 @@ export interface AccountInfo {
   hub?: string
 }
 
+/** A withdrawal that provably came in full from one depositor */
+export interface LinkedUnwrap {
+  handle: string
+  token: string
+  symbol: string
+  /** the amount, exact */
+  amount: string
+  time: number
+  depositor: string
+  burner: string
+  receiver: string
+  /** pools on the way that only return members their own funds */
+  via: string[]
+  /** how the page's address or transaction takes part in it */
+  role: 'depositor' | 'path' | 'unwrapper' | 'receiver' | 'unwrap'
+}
+
 export interface AddressSummary {
   account: AccountInfo
   events: AddressEvent[]
   /** current balance per token */
   balances: { token: string; symbol: string; balance: Amount | null }[]
   counterparties: Counterparty[]
-  /** depositors whose wraps provably funded this address's withdrawals */
+  /** withdrawals linked in full that it is part of, newest first */
+  linked: { total: number; rows: LinkedUnwrap[] }
+  /** depositors whose wraps provably funded part of its withdrawals */
   fundedBy: Link[]
-  /** withdrawals elsewhere this address's wraps provably funded */
+  /** withdrawals elsewhere this address's wraps provably funded in part */
   funded: Link[]
   /** who can decrypt this account's balances besides itself */
   delegations: Delegation[]
@@ -376,6 +395,10 @@ export interface TxDetail {
     handle: string
   }[]
   ops: OpNode[]
+  /** unwraps requested or finalized in it (handles) */
+  unwraps: string[]
+  /** linked withdrawals whose path goes through it */
+  linked: { total: number; rows: LinkedUnwrap[] }
 }
 
 export interface ReadersSummary {

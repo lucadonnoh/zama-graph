@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react'
-import type { TxDetail } from '../../src/graph/types'
+import type { TxDetail, UnwrapDetail } from '../../src/graph/types'
 import { api } from './api'
 import { plural } from './format'
 import { OpList } from './HandlePage'
+import { Linked } from './LinkFlow'
+import { Flow, History } from './UnwrapPage'
 import { Address, Amount, Handle, Muted, Section, Time, Tx } from './ui'
 
 const ZERO = '0x0000000000000000000000000000000000000000'
@@ -22,6 +24,7 @@ export function TxPage({ hash }: { hash: string }) {
       .then(setD)
       .catch((e: unknown) => setError(String(e)))
   }, [hash])
+  const unwraps = useUnwraps(d?.unwraps ?? [])
   if (error) return <Muted>{error}</Muted>
   if (!d) return <Muted>Loading…</Muted>
   return (
@@ -50,6 +53,17 @@ export function TxPage({ hash }: { hash: string }) {
           )}
         </div>
       </section>
+      {unwraps.map((u) => (
+        <Flow key={u.handle} d={u} />
+      ))}
+      <Linked
+        linked={d.linked}
+        through={
+          d.transfers.some((t) => t.from === ZERO)
+            ? 'from this deposit'
+            : 'via this tx'
+        }
+      />
       {d.transfers.length > 0 && (
         <Section title={plural(d.transfers.length, 'confidential transfer')}>
           <table className="stack w-full text-left text-xs">
@@ -98,6 +112,9 @@ export function TxPage({ hash }: { hash: string }) {
           </table>
         </Section>
       )}
+      {unwraps.map((u) => (
+        <History key={u.handle} d={u} />
+      ))}
       {d.ops.length > 0 && (
         <Section title="FHE operations" note={`${d.ops.length} in log order`}>
           <OpList ops={d.ops} />
@@ -105,4 +122,24 @@ export function TxPage({ hash }: { hash: string }) {
       )}
     </>
   )
+}
+
+/** The unwraps a transaction requested or finalized, in full */
+function useUnwraps(handles: string[]): UnwrapDetail[] {
+  const [list, setList] = useState<UnwrapDetail[]>([])
+  const key = handles.join(',')
+  useEffect(() => {
+    let cancelled = false
+    setList([])
+    const wanted = key ? key.split(',').slice(0, 3) : []
+    Promise.all(wanted.map((h) => api.unwrap(h).catch(() => undefined))).then(
+      (r) => {
+        if (!cancelled) setList(r.filter((u): u is UnwrapDetail => !!u))
+      },
+    )
+    return () => {
+      cancelled = true
+    }
+  }, [key])
+  return list
 }

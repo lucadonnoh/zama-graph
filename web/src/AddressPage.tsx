@@ -2,8 +2,9 @@ import { useEffect, useMemo, useState } from 'react'
 import type { AddressEvent, AddressSummary } from '../../src/graph/types'
 import { WILDCARD } from '../../src/protocol'
 import { api } from './api'
-import { day, plural, units } from './format'
+import { day, plural } from './format'
 import { HubPanel } from './HubPanel'
+import { Linked, PartialLinks } from './LinkFlow'
 import { labelOf, useLabels } from './labels'
 import { nameOf, useNames } from './names'
 import { TokenPanel } from './TokenPanel'
@@ -121,43 +122,25 @@ function Balances({ s }: { s: AddressSummary }) {
   )
 }
 
-/** Who this address is linked to through its withdrawals */
+/** Who this address is linked to through withdrawals, drawn as on an unwrap page */
 function Links({ s }: { s: AddressSummary }) {
-  if (s.fundedBy.length === 0 && s.funded.length === 0) return null
-  const own = s.account.address
-  const line = (links: AddressSummary['funded']) =>
-    links.map((l, i) => (
-      <span key={`${l.address}:${l.token}`}>
-        {i > 0 && <Muted> · </Muted>}
-        {l.address === own ? (
-          <span className="chip chip-strong">itself</span>
-        ) : (
-          <Address address={l.address} />
-        )}
-        <span className="mono" style={{ color: 'var(--muted)' }}>
-          {' '}
-          {l.withdrawals === 1 ? '' : `${l.withdrawals}× `}≥ {units(l.min)}{' '}
-          {s.events.find((e) => e.token === l.token)?.symbol ?? ''}
-        </span>
-      </span>
-    ))
+  const symbol = (token: string) =>
+    s.events.find((e) => e.token === token)?.symbol ?? ''
   return (
-    <Section title="Links" note="≥ what its wraps provably supplied">
-      <div className="grid gap-1 text-sm">
-        {s.fundedBy.length > 0 && (
-          <div>
-            <Muted>funded by </Muted>
-            {line(s.fundedBy)}
-          </div>
-        )}
-        {s.funded.length > 0 && (
-          <div>
-            <Muted>funded unwraps of </Muted>
-            {line(s.funded)}
-          </div>
-        )}
-      </div>
-    </Section>
+    <Linked
+      linked={s.linked}
+      here={s.account.address}
+      partial={
+        s.fundedBy.length + s.funded.length > 0 ? (
+          <PartialLinks
+            fundedBy={s.fundedBy}
+            funded={s.funded}
+            here={s.account.address}
+            symbolOf={symbol}
+          />
+        ) : undefined
+      }
+    />
   )
 }
 

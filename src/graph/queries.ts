@@ -18,6 +18,7 @@ import type {
   ClearSource,
   Delegation,
   HandleDetail,
+  LinkedUnwrap,
   LiveEvent,
   OpNode,
   ReadersSummary,
@@ -425,7 +426,7 @@ export function addressSummary(db: Db, address: string): AddressSummary {
     db,
     `select s.depositor address, count(*) withdrawals, sum(cast(s.min as integer)) min, t.token
      from trace t join share s on s.handle = t.handle
-     where t.burner = ?1 and s.min <> '0'
+     where t.burner = ?1 and s.min <> '0' and s.min <> t.lo
      group by s.depositor, t.token order by min desc limit 30`,
     a,
   ).map((l) => ({ ...l, min: String(l.min) }))
@@ -438,7 +439,7 @@ export function addressSummary(db: Db, address: string): AddressSummary {
     db,
     `select t.burner address, count(*) withdrawals, sum(cast(s.min as integer)) min, t.token
      from share s join trace t on t.handle = s.handle
-     where s.depositor = ?1 and t.burner <> ?1 and s.min <> '0'
+     where s.depositor = ?1 and t.burner <> ?1 and s.min <> '0' and s.min <> t.lo
      group by t.burner, t.token order by min desc limit 30`,
     a,
   ).map((l) => ({ ...l, min: String(l.min) }))
@@ -483,6 +484,20 @@ export function addressSummary(db: Db, address: string): AddressSummary {
     events,
     balances,
     counterparties,
+    linked: linkedUnwraps(
+      db,
+      `t.burner = ?1 or t.receiver = ?1 or t.sender = ?1 or t.handle in
+       (select handle from trace_account where account = ?1)`,
+      a,
+      (r) =>
+        r.burner === a
+          ? 'unwrapper'
+          : r.receiver === a
+            ? 'receiver'
+            : r.sender === a
+              ? 'depositor'
+              : 'path',
+    ),
     fundedBy,
     funded,
     delegations,
@@ -856,6 +871,11 @@ export function txDetail(db: Db, hash: string): TxDetail | undefined {
     `${OP_SELECT} where o.tx = ? order by o.block, o.log limit 400`,
     t.id,
   )
+  const unwraps = all<{ handle: number }>(
+    db,
+    'select handle from unwrap where tx = ?1 or fin_tx = ?1 order by block, log limit 5',
+    t.id,
+  )
   return {
     hash: h,
     block: t.block,
@@ -872,6 +892,85 @@ export function txDetail(db: Db, hash: string): TxDetail | undefined {
       handle: hex.get(x.amount) ?? '',
     })),
     ops: opNodes(db, ops),
+    unwraps: [
+      ...hexOf(
+        db,
+        unwraps.map((u) => u.handle),
+      ).values(),
+    ],
+    linked: linkedUnwraps(
+      db,
+      `t.handle in (select handle from trace_tx where tx = ?1)
+       and t.handle not in (select handle from unwrap where tx = ?1 or fin_tx = ?1)`,
+      t.id,
+      () => 'path',
+    ),
+  }
+}
+
+/** Rows of linked unwraps shown on a page */
+const LINKED_ROWS = 40
+
+/**
+ * The withdrawals that provably came in full from one depositor, among
+ * those `where` selects (on `trace t`, with the page's subject as ?1),
+ * newest first
+ */
+function linkedUnwraps(
+  db: Db,
+  where: string,
+  subject: string | number,
+  role: (r: {
+    burner: string
+    receiver: string
+    sender: string
+  }) => LinkedUnwrap['role'],
+): { total: number; rows: LinkedUnwrap[] } {
+  // the path tables come with the first derive
+  if (!one(db, "select 1 from sqlite_master where name = 'trace_tx'")) {
+    return { total: 0, rows: [] }
+  }
+  const linked = `t.sender_min = t.lo and t.lo <> '0' and (${where})`
+  const total =
+    one<{ n: number }>(
+      db,
+      `select count(*) n from trace t where ${linked}`,
+      subject,
+    )?.n ?? 0
+  const rows = all<{
+    handle: number
+    token: string
+    lo: string
+    time: number
+    sender: string
+    burner: string
+    receiver: string
+    via: string | null
+  }>(
+    db,
+    `select t.handle, t.token, t.lo, t.time, t.sender, t.burner, t.receiver, t.via
+     from trace t where ${linked} order by t.time desc limit ${LINKED_ROWS}`,
+    subject,
+  )
+  const sym = symbols(db)
+  const hex = hexOf(
+    db,
+    rows.map((r) => r.handle),
+  )
+  return {
+    total,
+    rows: rows.map((r) => ({
+      handle: hex.get(r.handle) ?? '',
+      token: r.token,
+      symbol: sym.get(r.token) ?? '?',
+      amount: r.lo,
+      time: r.time,
+      depositor: r.sender,
+      burner: r.burner,
+      receiver: r.receiver,
+      via: r.via ? r.via.split(',').filter(Boolean) : [],
+      role: role(r),
+    })),
   }
 }
 
