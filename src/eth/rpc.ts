@@ -286,10 +286,15 @@ export class JsonRpc {
   }
 }
 
-function isTooLarge(e: unknown): boolean {
-  return /size exceeded|too many|limit|more than|range|too large/i.test(
-    String(e),
-  )
+/**
+ * Whether a provider refused a request for its size (a getLogs range with
+ * too many logs), worded differently by every provider. Throttling is not:
+ * that is waited out, since splitting would only send more requests.
+ */
+export function isTooLarge(e: unknown): boolean {
+  const s = String(e)
+  if (/\b429\b|rate.?limit|too many requests|throttl/i.test(s)) return false
+  return /exceed|too big|too large|too many|limit|more than|range/i.test(s)
 }
 
 export function hex(n: number): string {
