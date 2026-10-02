@@ -1,0 +1,424 @@
+import { type Db, setSync, transaction } from '../db'
+import { log } from '../log'
+import { type Hub, hubModes, memberPools } from './hubs'
+import { type Ev, type Ledger, ZERO } from './model'
+
+/** Most transfers one history walk visits before it gives up */
+export const TRACE_LIMIT = 3000
+
+export interface History {
+  /** event indices of the history, in time order */
+  events: number[]
+  /** the mints (wraps) in it */
+  wraps: number[]
+  /** inflows from contracts the walk does not enter (hubs) */
+  outside: number[]
+  hubs: Set<string>
+  /**
+   * inflows from contracts that return members their own funds: the walk
+   * goes on from what the member paid into the contract before
+   */
+  returns: number[]
+  /** those contracts */
+  members: Set<string>
+  /** the accounts the walk went through */
+  accounts: Set<string>
+  /** the walk hit TRACE_LIMIT; what lies beyond is unknown */
+  truncated: boolean
+  /** some account's balance was provably empty, which cut its past off */
+  cut: boolean
+}
+
+/**
+ * How the walk treats an address: walk through it, stop at it (a pool whose
+ * inflows count as outside sources), or follow a member's own funds through
+ * it (a pool that only ever returns to a member what that member paid in).
+ */
+export type Mode = 'enter' | 'stop' | 'member'
+
+/**
+ * The backward history of event `at` (a burn): every transfer that can
+ * have carried funds into it. Walking back from an account at a point in
+ * time, its inflows before that point are followed to their senders. Two
+ * things stop the walk early, and both are proofs, not heuristics:
+ *
+ * - a transfer whose amount is provably zero carried nothing (a failed
+ *   transfer, a decoy leg of the vault router);
+ * - a balance that is provably zero after some event means nothing before
+ *   that event can be in the account's later funds.
+ *
+ * Contracts that pool many users' funds (hubs) are not entered; their
+ * inflows into the history are kept as outside sources. A pool that keeps
+ * an account per member and only returns its own funds to a member (the
+ * ZAMA auction's wallets refund a bidder what its own bids paid, less its
+ * allocation) is followed through that member's payments into it.
+ */
+export function history(
+  ledger: Ledger,
+  at: number,
+  modeOf: (address: string) => Mode,
+  /** whether a member pool keeps `account`'s funds apart in `token` */
+  member: (pool: string, token: string, account: string) => boolean = () =>
+    true,
+  limit = TRACE_LIMIT,
+): History {
+  const target = ledger.events[at]
+  if (!target) throw new Error(`no event ${at}`)
+  const token = target.token
+  const seen = new Set<number>()
+  const wraps: number[] = []
+  const outside: number[] = []
+  const hubs = new Set<string>()
+  const returns: number[] = []
+  const members = new Set<string>()
+  let truncated = false
+  let cut = false
+  const accounts = new Set<string>()
+  const stack: [string, number][] = [[target.src, at]]
+  walk: while (stack.length > 0) {
+    const [account, before] = stack.pop() as [string, number]
+    accounts.add(account)
+    const list = ledger.byAccount.get(`${token}:${account}`) ?? []
+    for (let j = lastBefore(list, before); j >= 0; j--) {
+      const i = list[j] as number
+      if (seen.has(i)) break
+      const e = ledger.events[i] as Ev
+      const after = e.src === account ? e.srcAfter : e.dstAfter
+      if (after && after.hi === 0n) {
+        cut = true
+        break
+      }
+      seen.add(i)
+      if (seen.size > limit) {
+        truncated = true
+        break walk
+      }
+      if (e.dst !== account || e.src === account || e.hi === 0n) continue
+      const mode = e.src === ZERO ? 'enter' : modeOf(e.src)
+      // what the member paid into the pool before this return
+      const paid =
+        mode === 'member' && member(e.src, token, account)
+          ? list.slice(0, j).filter((o) => {
+              const p = ledger.events[o] as Ev
+              return p.src === account && p.dst === e.src && p.hi > 0n
+            })
+          : []
+      if (e.src === ZERO) wraps.push(i)
+      else if (mode === 'member' && paid.length > 0) {
+        returns.push(i)
+        members.add(e.src)
+        for (const o of paid) {
+          if (seen.has(o)) continue
+          seen.add(o)
+          stack.push([account, o])
+        }
+      } else if (mode !== 'enter') {
+        outside.push(i)
+        hubs.add(e.src)
+      } else stack.push([e.src, i])
+    }
+  }
+  return {
+    events: [...seen].sort((a, b) => a - b),
+    wraps: wraps.sort((a, b) => a - b),
+    outside: outside.sort((a, b) => a - b),
+    hubs,
+    returns: returns.sort((a, b) => a - b),
+    members,
+    accounts,
+    truncated,
+    cut,
+  }
+}
+
+/** index in `list` (ascending) of the last value below `before` */
+function lastBefore(list: number[], before: number): number {
+  let lo = 0
+  let hi = list.length
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1
+    if ((list[mid] as number) < before) lo = mid + 1
+    else hi = mid
+  }
+  return lo - 1
+}
+
+/**
+ * The most that funds from some sources can have put into the burn `at`.
+ * Forward through the history, an account carries at most what flowed in
+ * from the sources, at most what each transfer moved (its upper bound), and
+ * at most its balance after each event. Sources are wraps, by event index,
+ * and outside inflows, which count with their upper bound.
+ */
+export function upTo(
+  ledger: Ledger,
+  h: History,
+  at: number,
+  isSource: (i: number) => boolean,
+): bigint {
+  const carried = new Map<string, bigint>()
+  const get = (a: string) => carried.get(a) ?? 0n
+  const cap = (a: string, bound: { hi: bigint } | undefined) => {
+    if (bound && get(a) > bound.hi) carried.set(a, bound.hi)
+  }
+  const outside = new Set(h.outside)
+  const returns = new Set(h.returns)
+  // a member's funds inside a pool that keeps an account per member
+  const pool = (hub: string, member: string) => `${hub}|${member}`
+  for (const i of h.events) {
+    if (i >= at) break
+    const e = ledger.events[i] as Ev
+    if (h.members.has(e.dst) && e.src !== ZERO) {
+      const moved = min(get(e.src), e.hi)
+      const key = pool(e.dst, e.src)
+      if (moved > 0n) carried.set(key, get(key) + moved)
+      cap(e.src, e.srcAfter)
+      continue
+    }
+    if (returns.has(i)) {
+      const moved = min(get(pool(e.src, e.dst)), e.hi)
+      if (moved > 0n) carried.set(e.dst, get(e.dst) + moved)
+      cap(e.dst, e.dstAfter)
+      continue
+    }
+    if (e.src === ZERO) {
+      if (isSource(i)) carried.set(e.dst, get(e.dst) + e.hi)
+      cap(e.dst, e.dstAfter)
+      continue
+    }
+    if (e.dst === ZERO) {
+      cap(e.src, e.srcAfter)
+      continue
+    }
+    const moved = outside.has(i)
+      ? isSource(i)
+        ? e.hi
+        : 0n
+      : min(get(e.src), e.hi)
+    if (moved > 0n) carried.set(e.dst, get(e.dst) + moved)
+    cap(e.dst, e.dstAfter)
+    cap(e.src, e.srcAfter)
+  }
+  const target = ledger.events[at] as Ev
+  return min(get(target.src), target.hi)
+}
+
+export interface Share {
+  depositor: string
+  wraps: number
+  /** provably at least this much of the withdrawal came from its wraps */
+  min: bigint
+  /** at most this much can have; undefined when the history is truncated */
+  max: bigint | undefined
+  first: number
+  last: number
+}
+
+export interface Trace {
+  handle: number
+  token: string
+  burner: string
+  receiver: string
+  time: number
+  lo: bigint
+  hi: bigint
+  origin: 'deposit' | 'several' | 'hub' | 'none' | 'limit' | 'empty'
+  shares: Share[]
+  hubs: string[]
+  /** pools it went through that return members their own funds */
+  via: string[]
+  truncated: boolean
+  cut: boolean
+  events: number
+}
+
+/**
+ * Where the funds of one withdrawal came from. Wraps are grouped by who
+ * paid for them (the depositor of the underlying). A group's minimum is
+ * what the other groups and the hubs together cannot cover; its maximum is
+ * what can reach the withdrawal from its wraps at all.
+ */
+export function traceUnwrap(
+  ledger: Ledger,
+  at: number,
+  modeOf: (address: string) => Mode,
+  member?: (pool: string, token: string, account: string) => boolean,
+): Trace {
+  const e = ledger.events[at] as Ev
+  const u = ledger.unwraps.get(at)
+  const h = history(ledger, at, modeOf, member)
+  const groups = new Map<string, number[]>()
+  for (const w of h.wraps) {
+    const d = ledger.wraps.get(w)?.depositor ?? (ledger.events[w] as Ev).dst
+    groups.set(d, [...(groups.get(d) ?? []), w])
+  }
+  const shares: Share[] = []
+  for (const [depositor, ws] of groups) {
+    const mine = new Set(ws)
+    const max = h.truncated
+      ? undefined
+      : upTo(ledger, h, at, (i) => mine.has(i))
+    if (max === 0n) continue
+    shares.push({
+      depositor,
+      wraps: ws.length,
+      min: 0n,
+      max,
+      first: (ledger.events[ws[0] as number] as Ev).time,
+      last: (ledger.events[ws[ws.length - 1] as number] as Ev).time,
+    })
+  }
+  // lower bounds for the largest few: what all other sources cannot cover
+  if (!h.truncated) {
+    const top = [...shares]
+      .sort((a, b) => cmp(b.max ?? 0n, a.max ?? 0n))
+      .slice(0, 6)
+    for (const s of top) {
+      const mine = new Set(groups.get(s.depositor))
+      const others = upTo(ledger, h, at, (i) => !mine.has(i))
+      s.min = e.lo > others ? e.lo - others : 0n
+    }
+  }
+  shares.sort((a, b) => cmp(b.min, a.min) || cmp(b.max ?? 0n, a.max ?? 0n))
+  const origin: Trace['origin'] =
+    e.hi === 0n
+      ? 'empty'
+      : h.truncated
+        ? 'limit'
+        : shares.length === 0 && h.outside.length === 0
+          ? 'none'
+          : h.outside.length > 0 && (shares[0]?.min ?? 0n) < e.lo
+            ? 'hub'
+            : shares.length > 1 && (shares[0]?.min ?? 0n) < e.lo
+              ? 'several'
+              : 'deposit'
+  return {
+    handle: e.amount,
+    token: e.token,
+    burner: e.src,
+    receiver: u?.receiver ?? e.src,
+    time: e.time,
+    lo: e.lo,
+    hi: e.hi,
+    origin,
+    shares,
+    hubs: [...h.hubs],
+    via: [...h.members],
+    truncated: h.truncated,
+    cut: h.cut,
+    events: h.events.length,
+  }
+}
+
+function min(a: bigint, b: bigint): bigint {
+  return a < b ? a : b
+}
+
+function cmp(a: bigint, b: bigint): number {
+  return a < b ? -1 : a > b ? 1 : 0
+}
+
+/** Traces every unwrap and stores the results (tables trace and share) */
+export function deriveTraces(
+  db: Db,
+  ledger: Ledger,
+  hubs: Map<string, Hub>,
+): number {
+  const started = Date.now()
+  db.exec(`create table if not exists trace (
+    handle integer primary key,
+    token text not null,
+    burner text not null,
+    receiver text not null,
+    time integer not null,
+    lo text not null,
+    hi text not null,
+    origin text not null,         -- deposit, several, hub, none, limit, empty
+    depositors integer not null,  -- groups that can have contributed
+    sender text,                  -- the depositor with the largest proven share
+    sender_min text,
+    sender_max text,
+    hubs text,                    -- hubs whose funds can be in it
+    events integer not null,
+    truncated integer not null,
+    cut integer not null
+  )`)
+  const columns = new Set(
+    (db.prepare('pragma table_info(trace)').all() as { name: string }[]).map(
+      (c) => c.name,
+    ),
+  )
+  if (!columns.has('via')) db.exec('alter table trace add column via text')
+  db.exec('create index if not exists trace_sender on trace(sender)')
+  db.exec('create index if not exists trace_burner on trace(burner)')
+  db.exec(`create table if not exists share (
+    handle integer not null,      -- the unwrap
+    depositor text not null,
+    wraps integer not null,
+    min text not null,
+    max text,
+    first integer not null,
+    last integer not null,
+    primary key (handle, depositor)
+  )`)
+  db.exec('create index if not exists share_depositor on share(depositor)')
+  const pools = memberPools(db)
+  const modeOf = hubModes(hubs.values(), pools)
+  const traces: Trace[] = []
+  for (const at of ledger.unwraps.keys()) {
+    const e = ledger.events[at] as Ev
+    if (modeOf(e.src) !== 'enter') continue
+    traces.push(traceUnwrap(ledger, at, modeOf, pools.member))
+  }
+  transaction(db, () => {
+    db.exec('delete from trace')
+    db.exec('delete from share')
+    const ins = db.prepare(
+      `insert into trace (handle, token, burner, receiver, time, lo, hi, origin, depositors, sender, sender_min, sender_max, hubs, events, truncated, cut, via)
+       values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    const insShare = db.prepare(
+      'insert into share (handle, depositor, wraps, min, max, first, last) values (?, ?, ?, ?, ?, ?, ?)',
+    )
+    for (const t of traces) {
+      const top = t.shares[0]
+      ins.run(
+        t.handle,
+        t.token,
+        t.burner,
+        t.receiver,
+        t.time,
+        String(t.lo),
+        String(t.hi),
+        t.origin,
+        t.shares.length,
+        top?.depositor ?? null,
+        top ? String(top.min) : null,
+        top?.max === undefined ? null : String(top.max),
+        t.hubs.join(','),
+        t.events,
+        t.truncated ? 1 : 0,
+        t.cut ? 1 : 0,
+        t.via.join(','),
+      )
+      for (const s of t.shares.slice(0, 50)) {
+        insShare.run(
+          t.handle,
+          s.depositor,
+          s.wraps,
+          String(s.min),
+          s.max === undefined ? null : String(s.max),
+          s.first,
+          s.last,
+        )
+      }
+    }
+  })
+  setSync(
+    db,
+    'traces',
+    JSON.stringify({ count: traces.length, at: Date.now() }),
+  )
+  log('traces', { unwraps: traces.length, ms: Date.now() - started })
+  return traces.length
+}

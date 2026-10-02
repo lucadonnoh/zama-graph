@@ -1,0 +1,285 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+  --page: #f9f9f7;
+  --surface: #fcfcfb;
+  --ink: #0b0b0b;
+  --ink-2: #52514e;
+  --muted: #898781;
+  --hairline: #e1e0d9;
+  --axis: #c3c2b7;
+  --border: rgba(11, 11, 11, 0.1);
+  --wash: rgba(11, 11, 11, 0.04);
+  /* Zama's yellow (zama.org): the highlight, for what the data reveals */
+  --zama: #ffd208;
+  --on-zama: #0b0b0b;
+  --mark: rgba(255, 210, 8, 0.6);
+  --mark-ink: #0b0b0b;
+  --mark-line: #e0b400;
+  /* around it: teal in, vermilion out, indigo for pools */
+  --deposit: #0e9474;
+  --withdrawal: #e8532b;
+  --hub: #4a5bd4;
+  --warning: #c97a00;
+  --negative: #d70000;
+  /* how much the public data says about an amount */
+  --public: #0b0b0b;
+  --bounded: #52514e;
+  --hidden: #a9a79f;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --page: #0d0d0d;
+    --surface: #1a1a19;
+    --ink: #ffffff;
+    --ink-2: #c3c2b7;
+    --muted: #898781;
+    --hairline: #2c2c2a;
+    --axis: #383835;
+    --border: rgba(255, 255, 255, 0.1);
+    --wash: rgba(255, 255, 255, 0.06);
+    --mark: transparent;
+    --mark-ink: #ffd208;
+    --mark-line: #ffd208;
+    --deposit: #2cc79a;
+    --withdrawal: #ff7a52;
+    --hub: #8c9bff;
+    --warning: #f5a524;
+    --negative: #ff5d5d;
+    --public: #ffffff;
+    --bounded: #c3c2b7;
+    --hidden: #6b6a65;
+  }
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+body {
+  margin: 0;
+  background: var(--page);
+  color: var(--ink);
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-size: 14px;
+}
+a {
+  color: inherit;
+  text-decoration: none;
+}
+a:hover {
+  text-decoration: underline;
+}
+.mono {
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+}
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.hairline {
+  border-color: var(--hairline);
+}
+input.search {
+  background: var(--surface);
+  border: 1px solid var(--axis);
+  border-radius: 6px;
+  color: var(--ink);
+  padding: 6px 10px;
+  width: 100%;
+}
+input.search:focus {
+  outline: 2px solid var(--mark-line);
+  outline-offset: 1px;
+}
+.row:hover {
+  background: var(--wash);
+}
+.chip {
+  border: 1px solid var(--axis);
+  border-radius: 4px;
+  padding: 0 4px;
+  font-size: 11px;
+  color: var(--ink-2);
+  white-space: nowrap;
+}
+.chip-hub {
+  border-color: var(--hub);
+  color: var(--hub);
+}
+/* Zama's own accounts */
+.chip-zama {
+  background: var(--ink);
+  border-color: var(--ink);
+  color: var(--page);
+}
+/* a fact the data reveals */
+.chip-strong {
+  background: var(--zama);
+  border-color: var(--zama);
+  color: var(--on-zama);
+}
+.chip-deposit {
+  border-color: var(--deposit);
+  color: var(--deposit);
+}
+.chip-withdrawal {
+  border-color: var(--withdrawal);
+  color: var(--withdrawal);
+}
+.chip-warning {
+  border-color: var(--warning);
+  color: var(--warning);
+}
+button.toggle {
+  border: 1px solid var(--axis);
+  border-radius: 6px;
+  padding: 2px 8px;
+  color: var(--ink-2);
+  background: transparent;
+}
+button.toggle.on {
+  color: var(--on-zama);
+  background: var(--zama);
+  border-color: var(--zama);
+}
+button.toggle:disabled {
+  opacity: 0.5;
+}
+.help {
+  cursor: help;
+  text-decoration: underline dotted;
+}
+.amt-public {
+  color: var(--public);
+}
+/* pinned by the data, published by nobody: highlighted */
+.amt-derived {
+  color: var(--mark-ink);
+  background: var(--mark);
+  border-radius: 2px;
+  padding: 0 2px;
+  font-weight: 500;
+}
+.amt-bounded {
+  color: var(--bounded);
+}
+.amt-hidden {
+  color: var(--hidden);
+}
+.dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 3px;
+  margin-right: 6px;
+  vertical-align: 1px;
+}
+td + td,
+th + th {
+  padding-left: 12px;
+}
+.stat {
+  display: grid;
+  gap: 2px;
+}
+.stat-value {
+  font-size: 22px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+}
+mark {
+  background: var(--mark);
+  color: inherit;
+  padding: 0 2px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) mark {
+    background: none;
+    color: var(--zama);
+  }
+}
+.logo {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+  background: var(--zama);
+  margin-right: 7px;
+  vertical-align: -1px;
+}
+.stat-label {
+  color: var(--muted);
+  font-size: 12px;
+}
+.lead {
+  color: var(--ink-2);
+  max-width: 72ch;
+  line-height: 1.5;
+}
+.bar {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--wash);
+  overflow: hidden;
+  display: flex;
+}
+.bar > span {
+  display: block;
+  height: 100%;
+}
+.tooltip {
+  position: fixed;
+  pointer-events: none;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-size: 12px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+  z-index: 10;
+  max-width: 340px;
+}
+details > summary {
+  cursor: pointer;
+}
+/* Phones: table rows become wrapped lines, headers move into data-label */
+@media (max-width: 639px) {
+  table.stack,
+  table.stack tbody {
+    display: block;
+  }
+  table.stack thead {
+    display: none;
+  }
+  table.stack tr {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    column-gap: 10px;
+    row-gap: 2px;
+    padding: 5px 0;
+  }
+  table.stack td {
+    padding: 0;
+    text-align: left;
+  }
+  table.stack td.wide {
+    flex-basis: 100%;
+  }
+  table.stack td[data-label]::before {
+    content: attr(data-label) " ";
+    color: var(--muted);
+  }
+  table.stack td:empty {
+    display: none;
+  }
+}
