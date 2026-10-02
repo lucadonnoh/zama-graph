@@ -162,8 +162,7 @@ export function App() {
       {route.page === 'about' && <About status={status} />}
 
       <footer className="mt-6 text-xs" style={{ color: 'var(--muted)' }}>
-        By <a href="https://l2beat.com">L2BEAT</a>, from Ethereum, the Zama
-        Gateway and Zama's public APIs only.{' '}
+        Derived from Ethereum and the Zama Gateway only.{' '}
         <span className="amt-derived">Highlighted</span> values were published
         by nobody: the public data allows no other.
       </footer>

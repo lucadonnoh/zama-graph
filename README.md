@@ -1,8 +1,8 @@
 # zama-graph
 
-By [L2BEAT](https://l2beat.com). Everything shown is derived from Ethereum,
-the Zama Gateway and what Zama's KMS publishes to anyone who asks; nothing is
-inferred beyond what the data supports.
+Everything shown is derived from Ethereum, the Zama Gateway and what Zama's
+KMS publishes to anyone who asks; nothing is inferred beyond what the data
+supports.
 
 An explorer for [Zama confidential tokens](https://l2beat.com/privacy/projects/zama-cw):
 for every account, transfer and withdrawal it shows what the public data
