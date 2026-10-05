@@ -1,15 +1,18 @@
 import { all, type Db, handleId, one } from '../db'
 import { wordBig } from '../eth/rpc'
 import { KNOWN, Op, TOPICS } from '../protocol'
+import { topicAddr, topicNum, words } from './hubs'
 import { amounts, tokens } from './queries'
-import type { BatchRow, HubDetail, IntentRow, PriceLevel } from './types'
+import type {
+  Amount,
+  BatchRow,
+  HubDetail,
+  IntentRow,
+  PriceLevel,
+} from './types'
 
 /** Rows of a hub view: the newest batches, intents, price levels */
 const MAX_ROWS = 60
-
-const topicNum = (t: string | undefined) => Number(wordBig((t ?? '').slice(2)))
-const topicAddr = (t: string | undefined) => `0x${(t ?? '').slice(26)}`
-const words = (data: string) => data.slice(2).match(/.{64}/g) ?? []
 
 /** What one pooling contract makes public about the funds that meet in it */
 export function hubDetail(db: Db, address: string): HubDetail | undefined {
@@ -84,6 +87,18 @@ export function hubDetail(db: Db, address: string): HubDetail | undefined {
   return detail
 }
 
+/** A member's deposit in a batch: the sum of its joins */
+function deposit(joins: Amount[]): Amount {
+  if (joins.length === 1) return joins[0] as Amount
+  const lo = joins.reduce((a, j) => a + BigInt(j.lo), 0n)
+  if (joins.some((j) => j.hi === undefined)) return { lo: String(lo) }
+  const hi = joins.reduce((a, j) => a + BigInt(j.hi ?? 0), 0n)
+  // a sum nobody published
+  return lo === hi
+    ? { lo: String(lo), hi: String(hi), source: 'inferred' }
+    : { lo: String(lo), hi: String(hi) }
+}
+
 type HubLog = {
   topic0: string
   topics: string
@@ -107,7 +122,8 @@ function batches(db: Db, batcher: string, logs: HubLog[]): BatchRow[] {
       members: Map<
         string,
         {
-          join: number
+          /** every join: its deposit is their sum */
+          joins: number[]
           joinHex: string
           claim?: number
           claimHex?: string
@@ -135,10 +151,11 @@ function batches(db: Db, batcher: string, logs: HubLog[]): BatchRow[] {
         const account = topicAddr(t[1])
         const hex = words(l.data)[0] ?? ''
         const m = raw.get(id)?.members
-        // one member can join a batch several times; the latest join counts
+        // a member can join a batch several times; each adds to its deposit
+        const prev = m?.get(account)
         m?.set(account, {
-          ...(m.get(account) ?? {}),
-          join: handleOf(hex),
+          ...prev,
+          joins: [...(prev?.joins ?? []), handleOf(hex)],
           joinHex: hex,
         })
         break
@@ -198,7 +215,7 @@ function batches(db: Db, batcher: string, logs: HubLog[]): BatchRow[] {
     const r = raw.get(b.id)
     b.members = [...(r?.members.entries() ?? [])].map(([account, m]) => ({
       account,
-      joined: amt.get(m.join) ?? { lo: '0' },
+      joined: deposit(m.joins.map((j) => amt.get(j) ?? { lo: '0' })),
       joinHandle: m.joinHex,
       claimed: m.claim !== undefined ? amt.get(m.claim) : undefined,
       claimHandle: m.claimHex,

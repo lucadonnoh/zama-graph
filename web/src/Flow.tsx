@@ -7,7 +7,21 @@ import type {
 } from '../../src/graph/types'
 import { day, pct, plural, units } from './format'
 import { labelOf, useLabels } from './labels'
-import { Address, Amount, exact, HUGE, Muted, Section, useExpand } from './ui'
+import {
+  Address,
+  Amount,
+  Bar,
+  exact,
+  Handle,
+  HUGE,
+  Kind,
+  Muted,
+  Section,
+  Time,
+  Tx,
+  useExpand,
+  visibility,
+} from './ui'
 
 /**
  * Who paid for a withdrawal, drawn left to right: the depositors, a band
@@ -108,8 +122,67 @@ function sources(d: UnwrapDetail): Source[] {
   return list
 }
 
+/**
+ * One withdrawal: what it took out, from whom, when it was requested and
+ * finalized, and where its funds came from as far as the public data
+ * proves
+ */
+export function Unwrap({ d }: { d: UnwrapDetail }) {
+  const v = visibility(d.amount)
+  return (
+    <section className="card grid gap-3 p-3">
+      <div className="grid gap-1">
+        <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1 text-base">
+          <Kind kind="unwrap" />
+          <span className="font-semibold">
+            <Amount a={d.amount} symbol={d.symbol} />
+          </span>
+          <Muted>from</Muted>
+          <Address address={d.burner} />
+          {d.receiver !== d.burner && (
+            <>
+              <Muted>to</Muted>
+              <Address address={d.receiver} />
+            </>
+          )}
+        </div>
+        <div className="text-xs text-ink-2">
+          requested <Time t={d.time} /> in <Tx hash={d.tx} />
+          {d.finalized && d.finTx ? (
+            <>
+              {' '}
+              · finalized <Time t={d.finTime ?? 0} /> in <Tx hash={d.finTx} />
+              {d.finalizer &&
+                d.finalizer !== d.burner &&
+                d.finalizer !== d.receiver && (
+                  <>
+                    {' '}
+                    by <Address address={d.finalizer} />
+                  </>
+                )}
+            </>
+          ) : (
+            <>
+              {' '}
+              · <span className="chip chip-warning">pending</span>{' '}
+              {v === 'public'
+                ? 'value public anyway'
+                : v === 'derived'
+                  ? 'value pinned anyway'
+                  : 'anyone can decrypt its value'}
+            </>
+          )}{' '}
+          · handle <Handle h={d.handle} chars={6} />
+          {d.decryptable && d.finalized && ' · publicly decryptable'}
+        </div>
+      </div>
+      <Sources d={d} />
+    </section>
+  )
+}
+
 /** Where a withdrawal's funds came from, as far as the public data proves */
-export function Flow({ d }: { d: UnwrapDetail }) {
+function Sources({ d }: { d: UnwrapDetail }) {
   useLabels()
   const t = d.trace
   if (!t) {
@@ -117,10 +190,10 @@ export function Flow({ d }: { d: UnwrapDetail }) {
     const l = labelOf(d.burner)
     if (!l?.kind || l.kind === 'wrapper') return null
     return (
-      <section className="card p-3 text-sm">
+      <div className="text-sm">
         Unwrapped by a pool: funds mixed, its members are public on{' '}
         <Address address={d.burner} />.
-      </section>
+      </div>
     )
   }
   const a = d.amount
@@ -171,15 +244,77 @@ export function Flow({ d }: { d: UnwrapDetail }) {
     t.truncated && 'too large to walk: lower bounds',
   ].filter(Boolean)
   return (
-    <section className="card grid gap-3 p-3">
+    <>
       <div className="text-sm">
         {caption}
-        <span className="ml-2 text-xs text-muted">{meta.join(' · ')}</span>
+        <span className="ml-2 text-xs text-muted">
+          {meta.join(' · ')}
+          {t.via.length > 0 && ' · through '}
+          {t.via.map((p) => (
+            <span key={p} className="mr-1">
+              <Address address={p} />
+            </span>
+          ))}
+        </span>
       </div>
       {total > 0n && list.length > 0 && t.origin !== 'empty' && (
         <Bands d={d} list={list} total={total} />
       )}
-    </section>
+      {d.shares.length > SOURCES && <ShareTable d={d} />}
+    </>
+  )
+}
+
+/** Every depositor, when there are more than the bands draw */
+function ShareTable({ d }: { d: UnwrapDetail }) {
+  const total = BigInt(d.amount.hi ?? d.amount.lo)
+  const w = (x: string | null) =>
+    total > 0n && x !== null ? Number((BigInt(x) * 1000n) / total) / 10 : 0
+  return (
+    <details>
+      <summary className="text-xs text-ink-2">
+        all {d.shares.length} depositors: at least (yellow), at most (grey)
+      </summary>
+      <table className="stack mt-1">
+        <thead>
+          <tr>
+            <th>Depositor</th>
+            <th>Wraps</th>
+            <th className="text-right">At least</th>
+            <th className="text-right">At most</th>
+            <th className="w-1/3" />
+          </tr>
+        </thead>
+        <tbody>
+          {d.shares.map((s) => (
+            <tr key={s.depositor}>
+              <td>
+                <Address address={s.depositor} />
+              </td>
+              <td className="whitespace-nowrap text-ink-2">
+                {s.wraps} · {day(s.first)}
+                {s.last !== s.first && ` – ${day(s.last)}`}
+              </td>
+              <td className="mono text-right" data-label="≥">
+                {units(s.min)}
+              </td>
+              <td className="mono text-right text-ink-2" data-label="≤">
+                {s.max === null ? '?' : units(s.max)}
+              </td>
+              <td className="wide">
+                <Bar
+                  parts={[
+                    { n: w(s.min), color: 'var(--zama)' },
+                    { n: w(s.max) - w(s.min), color: 'var(--axis)' },
+                    { n: 100 - Math.max(w(s.min), w(s.max)) },
+                  ]}
+                />
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </details>
   )
 }
 
@@ -395,7 +530,7 @@ function LinkRow({
         </div>
       </Box>
       <a
-        href={`#unwrap/${l.handle}`}
+        href={`#tx/${l.tx}`}
         className="flex items-center justify-center gap-1 overflow-hidden whitespace-nowrap text-xs font-semibold"
         style={{
           margin: `${INSET}px 0`,
@@ -405,12 +540,14 @@ function LinkRow({
         title="this unwrap: where it came from, and its history"
       >
         100%
-        {via && <span className="font-normal">· {via}</span>}
-        {l.via.length > 0 && <span className="font-normal">· via pool</span>}
+        {via && <span className="hidden font-normal sm:inline">· {via}</span>}
+        {l.via.length > 0 && (
+          <span className="hidden font-normal sm:inline">· via pool</span>
+        )}
       </a>
       <Box color="var(--withdrawal)">
         <div className="truncate">
-          <a href={`#unwrap/${l.handle}`} className="mono">
+          <a href={`#tx/${l.tx}`} className="mono">
             {units(l.amount)}
           </a>{' '}
           <Muted>{l.symbol}</Muted> <Muted>· {day(l.time)}</Muted>

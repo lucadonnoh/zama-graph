@@ -17,6 +17,7 @@ import {
   tokenDetail,
   txDetail,
   unwrapDetail,
+  unwrapsOf,
 } from './graph/queries'
 import { LIVE_FILTERS } from './graph/types'
 import { historyGraph } from './graph/view'
@@ -94,16 +95,18 @@ export function serve(db: Db, config: Config): void {
     '/api/address/:address',
     cached(120, (req) => {
       const a = String(req.params.address).toLowerCase()
-      return /^0x[0-9a-f]{40}$/.test(a) ? addressSummary(db, a) : undefined
+      if (!/^0x[0-9a-f]{40}$/.test(a)) return undefined
+      const s = addressSummary(db, a)
+      // tokens and pools take part in too much to draw
+      const busy = s.account.token || s.account.hub
+      return busy ? s : { ...s, graph: historyGraph(db, unwrapsOf(db, a, 9)) }
     }),
   )
 
   app.get(
     '/api/unwrap/:handle',
     cached(120, (req) => {
-      const d = unwrapDetail(db, String(req.params.handle))
-      if (!d) return undefined
-      return { ...d, graph: historyGraph(db, d.handle) }
+      return unwrapDetail(db, String(req.params.handle))
     }),
   )
 
@@ -114,7 +117,13 @@ export function serve(db: Db, config: Config): void {
 
   app.get(
     '/api/tx/:hash',
-    cached(300, (req) => txDetail(db, String(req.params.hash))),
+    cached(300, (req) => {
+      const d = txDetail(db, String(req.params.hash))
+      if (!d) return undefined
+      // its unwraps, and the linked ones that went through it
+      const handles = [...d.unwraps, ...d.linked.rows.map((l) => l.handle)]
+      return { ...d, graph: historyGraph(db, handles) }
+    }),
   )
 
   app.get('/api/token/:address', async (req, res) => {

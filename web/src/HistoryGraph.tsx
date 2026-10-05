@@ -1,9 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type {
-  HistoryGraph as Graph,
-  HistoryNode,
-  UnwrapDetail,
-} from '../../src/graph/types'
+import type { HistoryGraph as Graph, HistoryNode } from '../../src/graph/types'
 import { compact, date, shortHex } from './format'
 import { labelOf, useLabels } from './labels'
 import { nameOf, useNames } from './names'
@@ -21,15 +17,19 @@ const LANE = 4
 /** Graphs with more edges show amounts on hover only: they would overlap */
 const LABELS = 30
 
-/** Every transfer that can have funded a withdrawal, as a graph */
-export function History({ d }: { d: UnwrapDetail }) {
-  if (!d.graph || d.graph.edges.length <= 1) return null
+/**
+ * Every transfer that can have funded the withdrawals a page is about, as
+ * one graph, the page's address highlighted
+ */
+export function History({ graph, focus }: { graph?: Graph; focus?: string }) {
+  if (!graph || graph.edges.length <= 1) return null
+  const sinks = graph.nodes.filter((n) => n.kind === 'target').length
   return (
     <Section
       title="History"
-      note={`every transfer that can have funded it${d.graph.truncated ? ', newest part' : ''}`}
+      note={`every transfer that can have funded ${sinks === 1 ? 'it' : `these ${sinks} unwraps`}${graph.truncated ? ', newest part' : ''}`}
     >
-      <HistoryGraph graph={d.graph} />
+      <HistoryGraph graph={graph} focus={focus} />
     </Section>
   )
 }
@@ -58,7 +58,14 @@ interface Placed {
  * that go back (loops) are on request: every node already reaches the
  * withdrawal without them.
  */
-export function HistoryGraph({ graph }: { graph: Graph }) {
+export function HistoryGraph({
+  graph,
+  focus,
+}: {
+  graph: Graph
+  /** the page's address */
+  focus?: string
+}) {
   useLabels()
   const names = useNames(graph.nodes.map((n) => n.account))
   const [hover, setHover] = useState<string>()
@@ -141,6 +148,7 @@ export function HistoryGraph({ graph }: { graph: Graph }) {
               key={p.node.id}
               p={p}
               name={nameOf(names, p.node.account)}
+              focus={p.node.kind !== 'target' && p.node.account === focus}
               dim={!!hover && hover !== p.node.id}
               onHover={setHover}
             />
@@ -276,28 +284,39 @@ const STROKE: Record<HistoryNode['kind'], string> = {
 function NodeBox({
   p,
   name: ens,
+  focus,
   dim,
   onHover,
 }: {
   p: Placed
   name: string | undefined
+  /** the page's own address */
+  focus: boolean
   dim: boolean
   onHover: (id: string | undefined) => void
 }) {
   const n = p.node
   const l = labelOf(n.account)
+  // a batch converts at its published rate: claim = join × rate
   const title =
     n.kind === 'deposit'
       ? 'wraps paid by'
       : n.kind === 'target'
-        ? 'withdrawal to'
-        : n.kind === 'hub'
-          ? 'pooling contract'
-          : ''
+        ? n.linked
+          ? 'linked withdrawal to'
+          : 'withdrawal to'
+        : n.batch !== undefined
+          ? `batch #${n.batch} · ×${Number(n.rate ?? 0) / 1e6}`
+          : n.kind === 'hub'
+            ? 'pooling contract'
+            : n.symbol
+              ? `in ${n.symbol}`
+              : ''
   const name = l?.label ?? ens ?? shortHex(n.account, 5)
   return (
     <a
-      href={`#${n.account}`}
+      // a withdrawal leads to its transaction, everything else to its address
+      href={n.kind === 'target' && n.tx ? `#tx/${n.tx}` : `#${n.account}`}
       onMouseEnter={() => onHover(n.id)}
       onMouseLeave={() => onHover(undefined)}
     >
@@ -306,10 +325,14 @@ function NodeBox({
           width={W}
           height={H}
           rx={6}
-          fill="var(--surface)"
-          stroke={STROKE[n.kind]}
-          strokeWidth={n.kind === 'account' ? 1 : 1.5}
+          fill={focus ? 'var(--mark)' : 'var(--surface)'}
+          stroke={focus ? 'var(--mark-line)' : STROKE[n.kind]}
+          strokeWidth={focus ? 2 : n.kind === 'account' ? 1 : 1.5}
         />
+        {n.linked && (
+          // provably all from one depositor
+          <rect x={0} y={6} width={4} height={H - 12} fill="var(--zama)" />
+        )}
         <text x={8} y={13} fill="var(--muted)" style={{ fontSize: 9 }}>
           {title}
         </text>
@@ -347,18 +370,20 @@ function place(graph: Graph): { nodes: Placed[]; cols: number; rows: number } {
     out.set(e.from, [...(out.get(e.from) ?? []), e.to])
     into.set(e.to, [...(into.get(e.to) ?? []), e.from])
   }
-  const target = graph.nodes.find((n) => n.kind === 'target')
+  // every withdrawal in the last column, the rest by its distance to one
   const dist = new Map<string, number>()
-  if (target) {
-    dist.set(target.id, 0)
-    const queue = [target.id]
-    while (queue.length > 0) {
-      const id = queue.shift() as string
-      for (const from of into.get(id) ?? []) {
-        if (!dist.has(from)) {
-          dist.set(from, (dist.get(id) ?? 0) + 1)
-          queue.push(from)
-        }
+  const queue: string[] = []
+  for (const n of graph.nodes) {
+    if (n.kind !== 'target') continue
+    dist.set(n.id, 0)
+    queue.push(n.id)
+  }
+  while (queue.length > 0) {
+    const id = queue.shift() as string
+    for (const from of into.get(id) ?? []) {
+      if (!dist.has(from)) {
+        dist.set(from, (dist.get(id) ?? 0) + 1)
+        queue.push(from)
       }
     }
   }

@@ -1,6 +1,12 @@
 import { type Db, setSync, transaction } from '../db'
 import { log } from '../log'
-import { type Hub, hubModes, memberPools } from './hubs'
+import {
+  type Hub,
+  hubModes,
+  memberPools,
+  poolReturns,
+  type Returns,
+} from './hubs'
 import { type Ev, type Ledger, ZERO } from './model'
 
 /** Most transfers one history walk visits before it gives up */
@@ -18,7 +24,7 @@ export interface History {
   hubs: Set<string>
   /**
    * inflows from contracts that return members their own funds: the walk
-   * goes on from what the member paid into the contract before
+   * goes on from what paid for them (`Returns`), in whatever token
    */
   returns: number[]
   /** those contracts */
@@ -51,34 +57,33 @@ export type Mode = 'enter' | 'stop' | 'member'
  *
  * Contracts that pool many users' funds (hubs) are not entered; their
  * inflows into the history are kept as outside sources. A pool that keeps
- * an account per member and only returns its own funds to a member (the
- * ZAMA auction's wallets refund a bidder what its own bids paid, less its
- * allocation) is followed through that member's payments into it.
+ * an account per member and only returns its own funds to a member is
+ * followed through the payments that funded the return: a vault batch's
+ * claim back to the member's joins in the other token, a quit to the joins
+ * it returns, an auction wallet's refund to the bidder's bids.
  */
 export function history(
   ledger: Ledger,
   at: number,
   modeOf: (address: string) => Mode,
-  /** whether a member pool keeps `account`'s funds apart in `token` */
-  member: (pool: string, token: string, account: string) => boolean = () =>
-    true,
+  returns: Returns = new Map(),
   limit = TRACE_LIMIT,
 ): History {
   const target = ledger.events[at]
   if (!target) throw new Error(`no event ${at}`)
-  const token = target.token
   const seen = new Set<number>()
   const wraps: number[] = []
   const outside: number[] = []
   const hubs = new Set<string>()
-  const returns: number[] = []
+  const followed: number[] = []
   const members = new Set<string>()
   let truncated = false
   let cut = false
   const accounts = new Set<string>()
-  const stack: [string, number][] = [[target.src, at]]
+  // an account in a token, walked back from before an event
+  const stack: [string, string, number][] = [[target.token, target.src, at]]
   walk: while (stack.length > 0) {
-    const [account, before] = stack.pop() as [string, number]
+    const [token, account, before] = stack.pop() as [string, string, number]
     accounts.add(account)
     const list = ledger.byAccount.get(`${token}:${account}`) ?? []
     for (let j = lastBefore(list, before); j >= 0; j--) {
@@ -97,27 +102,27 @@ export function history(
       }
       if (e.dst !== account || e.src === account || e.hi === 0n) continue
       const mode = e.src === ZERO ? 'enter' : modeOf(e.src)
-      // what the member paid into the pool before this return
+      // what paid for this return, and can have carried something
       const paid =
-        mode === 'member' && member(e.src, token, account)
-          ? list.slice(0, j).filter((o) => {
-              const p = ledger.events[o] as Ev
-              return p.src === account && p.dst === e.src && p.hi > 0n
-            })
+        mode === 'member'
+          ? (returns.get(i)?.legs ?? []).filter(
+              (o) => (ledger.events[o]?.hi ?? 0n) > 0n,
+            )
           : []
       if (e.src === ZERO) wraps.push(i)
-      else if (mode === 'member' && paid.length > 0) {
-        returns.push(i)
+      else if (paid.length > 0) {
+        followed.push(i)
         members.add(e.src)
         for (const o of paid) {
           if (seen.has(o)) continue
           seen.add(o)
-          stack.push([account, o])
+          const p = ledger.events[o] as Ev
+          stack.push([p.token, p.src, o])
         }
       } else if (mode !== 'enter') {
         outside.push(i)
         hubs.add(e.src)
-      } else stack.push([e.src, i])
+      } else stack.push([token, e.src, i])
     }
   }
   return {
@@ -125,7 +130,7 @@ export function history(
     wraps: wraps.sort((a, b) => a - b),
     outside: outside.sort((a, b) => a - b),
     hubs,
-    returns: returns.sort((a, b) => a - b),
+    returns: followed.sort((a, b) => a - b),
     members,
     accounts,
     truncated,
@@ -149,60 +154,70 @@ function lastBefore(list: number[], before: number): number {
  * The most that funds from some sources can have put into the burn `at`.
  * Forward through the history, an account carries at most what flowed in
  * from the sources, at most what each transfer moved (its upper bound), and
- * at most its balance after each event. Sources are wraps, by event index,
- * and outside inflows, which count with their upper bound.
+ * at most its balance after each event, per token. Sources are wraps, by
+ * event index, and outside inflows, which count with their upper bound. A
+ * payment into a member pool is kept apart for the return it funds, which
+ * carries at most what its payments carried, converted at the return's
+ * rate (rounded up, so the bound stays a bound).
  */
 export function upTo(
   ledger: Ledger,
   h: History,
   at: number,
   isSource: (i: number) => boolean,
+  returns: Returns = new Map(),
 ): bigint {
   const carried = new Map<string, bigint>()
-  const get = (a: string) => carried.get(a) ?? 0n
-  const cap = (a: string, bound: { hi: bigint } | undefined) => {
-    if (bound && get(a) > bound.hi) carried.set(a, bound.hi)
+  const get = (k: string) => carried.get(k) ?? 0n
+  const add = (k: string, x: bigint) => {
+    if (x > 0n) carried.set(k, get(k) + x)
+  }
+  const cap = (k: string, bound: { hi: bigint } | undefined) => {
+    if (bound && get(k) > bound.hi) carried.set(k, bound.hi)
   }
   const outside = new Set(h.outside)
-  const returns = new Set(h.returns)
-  // a member's funds inside a pool that keeps an account per member
-  const pool = (hub: string, member: string) => `${hub}|${member}`
+  const followed = new Set(h.returns)
+  // the payments the followed returns draw on, each kept apart
+  const legs = new Set(h.returns.flatMap((i) => returns.get(i)?.legs ?? []))
+  const leg = (o: number) => `leg:${o}`
   for (const i of h.events) {
     if (i >= at) break
     const e = ledger.events[i] as Ev
-    if (h.members.has(e.dst) && e.src !== ZERO) {
-      const moved = min(get(e.src), e.hi)
-      const key = pool(e.dst, e.src)
-      if (moved > 0n) carried.set(key, get(key) + moved)
-      cap(e.src, e.srcAfter)
+    const src = `${e.token}:${e.src}`
+    const dst = `${e.token}:${e.dst}`
+    if (legs.has(i)) {
+      add(leg(i), min(get(src), e.hi))
+      cap(src, e.srcAfter)
       continue
     }
-    if (returns.has(i)) {
-      const moved = min(get(pool(e.src, e.dst)), e.hi)
-      if (moved > 0n) carried.set(e.dst, get(e.dst) + moved)
-      cap(e.dst, e.dstAfter)
+    if (followed.has(i)) {
+      const r = returns.get(i)
+      const paid = (r?.legs ?? []).reduce((a, o) => a + get(leg(o)), 0n)
+      const worth = r ? (paid * r.num + r.den - 1n) / r.den : 0n
+      add(dst, min(worth, e.hi))
+      cap(dst, e.dstAfter)
       continue
     }
     if (e.src === ZERO) {
-      if (isSource(i)) carried.set(e.dst, get(e.dst) + e.hi)
-      cap(e.dst, e.dstAfter)
+      if (isSource(i)) add(dst, e.hi)
+      cap(dst, e.dstAfter)
       continue
     }
     if (e.dst === ZERO) {
-      cap(e.src, e.srcAfter)
+      cap(src, e.srcAfter)
       continue
     }
     const moved = outside.has(i)
       ? isSource(i)
         ? e.hi
         : 0n
-      : min(get(e.src), e.hi)
-    if (moved > 0n) carried.set(e.dst, get(e.dst) + moved)
-    cap(e.dst, e.dstAfter)
-    cap(e.src, e.srcAfter)
+      : min(get(src), e.hi)
+    add(dst, moved)
+    cap(dst, e.dstAfter)
+    cap(src, e.srcAfter)
   }
   const target = ledger.events[at] as Ev
-  return min(get(target.src), target.hi)
+  return min(get(`${target.token}:${target.src}`), target.hi)
 }
 
 export interface Share {
@@ -258,6 +273,20 @@ export const LINKS = {
   several: `(t.origin not in ('hub', 'empty') and not ifnull(${LINKED}, 0))`,
 }
 
+const SEVERAL = "t.origin not in ('hub', 'empty') and t.depositors"
+
+/**
+ * Withdrawals outside pools by how many depositors can have funded them:
+ * their anonymity set. A set of one is a link (`LINKS.linked`); through a
+ * pool the set is unknown (`LINKS.pool`).
+ */
+export const SETS = {
+  'set-2': `(${SEVERAL} = 2)`,
+  'set-3-5': `(${SEVERAL} between 3 and 5)`,
+  'set-6-20': `(${SEVERAL} between 6 and 20)`,
+  'set-21': `(${SEVERAL} > 20)`,
+}
+
 /** Whether all of a withdrawal provably came from one depositor */
 export function linked(t: Trace): boolean {
   const top = t.shares[0]
@@ -274,11 +303,11 @@ export function traceUnwrap(
   ledger: Ledger,
   at: number,
   modeOf: (address: string) => Mode,
-  member?: (pool: string, token: string, account: string) => boolean,
+  returns: Returns = new Map(),
 ): Trace {
   const e = ledger.events[at] as Ev
   const u = ledger.unwraps.get(at)
-  const h = history(ledger, at, modeOf, member)
+  const h = history(ledger, at, modeOf, returns)
   const groups = new Map<string, number[]>()
   for (const w of h.wraps) {
     const d = ledger.wraps.get(w)?.depositor ?? (ledger.events[w] as Ev).dst
@@ -289,7 +318,7 @@ export function traceUnwrap(
     const mine = new Set(ws)
     const max = h.truncated
       ? undefined
-      : upTo(ledger, h, at, (i) => mine.has(i))
+      : upTo(ledger, h, at, (i) => mine.has(i), returns)
     if (max === 0n) continue
     shares.push({
       depositor,
@@ -307,7 +336,7 @@ export function traceUnwrap(
       .slice(0, 6)
     for (const s of top) {
       const mine = new Set(groups.get(s.depositor))
-      const others = upTo(ledger, h, at, (i) => !mine.has(i))
+      const others = upTo(ledger, h, at, (i) => !mine.has(i), returns)
       s.min = e.lo > others ? e.lo - others : 0n
     }
   }
@@ -408,13 +437,13 @@ export function deriveTraces(
     handle integer not null,      -- the unwrap
     primary key (tx, handle)
   ) without rowid`)
-  const pools = memberPools(db)
-  const modeOf = hubModes(hubs.values(), pools)
+  const modeOf = hubModes(hubs.values(), memberPools(db))
+  const returns = poolReturns(db, ledger)
   const traces: Trace[] = []
   for (const at of ledger.unwraps.keys()) {
     const e = ledger.events[at] as Ev
     if (modeOf(e.src) !== 'enter') continue
-    traces.push(traceUnwrap(ledger, at, modeOf, pools.member))
+    traces.push(traceUnwrap(ledger, at, modeOf, returns))
   }
   transaction(db, () => {
     db.exec('delete from trace')

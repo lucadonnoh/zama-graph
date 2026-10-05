@@ -88,6 +88,14 @@ export interface Stats {
     viaHub: number
     several: number
   }
+  /**
+   * withdrawals by their anonymity set, the depositors that can have
+   * funded them: one (linked), 2, 3 to 5, 6 to 20, more; and through a
+   * pool, where it is unknown
+   */
+  sets: Record<SetFilter, number>
+  /** withdrawals per month (YYYY-MM) by what the data proves */
+  months: { month: string; linked: number; pool: number; several: number }[]
   readers: {
     delegations: number
     delegates: number
@@ -137,6 +145,10 @@ export const LIVE_FILTERS = [
   'other',
   'pool',
   'several',
+  'set-2',
+  'set-3-5',
+  'set-6-20',
+  'set-21',
   'pending',
   'pinned',
   'router',
@@ -145,6 +157,18 @@ export const LIVE_FILTERS = [
 ] as const
 
 export type LiveFilter = (typeof LIVE_FILTERS)[number]
+
+/** The live filters of the anonymity sets, smallest first */
+export const SET_FILTERS = [
+  'linked',
+  'set-2',
+  'set-3-5',
+  'set-6-20',
+  'set-21',
+  'pool',
+] as const satisfies readonly LiveFilter[]
+
+export type SetFilter = (typeof SET_FILTERS)[number]
 
 export type LiveKind = 'wrap' | 'transfer' | 'unwrap'
 
@@ -266,6 +290,8 @@ export interface AccountInfo {
 /** A withdrawal that provably came in full from one depositor */
 export interface LinkedUnwrap {
   handle: string
+  /** the transaction that requested it */
+  tx: string
   token: string
   symbol: string
   /** the amount, exact */
@@ -300,6 +326,8 @@ export interface AddressSummary {
   reads: { requests: number; accounts: number; first: number | null }
   /** decryptions of this account's handles asked for by others */
   viewedBy: { user: string; requests: number; last: number }[]
+  /** the histories of the withdrawals it takes part in, newest */
+  graph?: HistoryGraph
 }
 
 export interface ShareRow {
@@ -327,20 +355,29 @@ export interface UnwrapDetail {
   decryptable: boolean
   trace?: TraceSummary & { truncated: boolean; cut: boolean; events: number }
   shares: ShareRow[]
-  /** the history as a graph, for drawing */
-  graph?: HistoryGraph
 }
 
 export interface HistoryNode {
-  /** `${account}` */
+  /**
+   * `${account}`, `${account}@${token}` for an account in another token
+   * than the withdrawal's, `deposit:`, `hub:` or `batch:` and the address
+   */
   id: string
   account: string
   kind: 'account' | 'deposit' | 'hub' | 'target'
   label?: string
+  /** the token, when not the withdrawal's */
+  symbol?: string
   /** deposits: depositor and amount */
   depositor?: string
   amount?: Amount
   time?: number
+  /** a vault batch the funds went through, and its exchange rate (6 decimals) */
+  batch?: number
+  rate?: string
+  /** withdrawals: the transaction that requested it, and whether it is linked */
+  tx?: string
+  linked?: boolean
 }
 
 export interface HistoryEdge {
@@ -421,6 +458,8 @@ export interface TxDetail {
   unwraps: string[]
   /** linked withdrawals whose path goes through it */
   linked: { total: number; rows: LinkedUnwrap[] }
+  /** the histories of its unwraps and of those linked through it */
+  graph?: HistoryGraph
 }
 
 export interface ReadersSummary {

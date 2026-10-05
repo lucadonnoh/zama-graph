@@ -2,7 +2,7 @@ import { all, type Db, one, setSync } from '../db'
 import { WILDCARD } from '../protocol'
 import { ROUTER_LEGS, ROUTER_REVEALED } from './hubs'
 import { MAX64, NAMED, ZERO } from './model'
-import { LINKS } from './traces'
+import { LINKS, SETS } from './traces'
 import type { Stats, TokenStats } from './types'
 
 /**
@@ -121,6 +121,21 @@ export function deriveStats(db: Db): Stats {
     viaHub: traced(LINKS.pool),
     several: traced(LINKS.several),
   }
+  const sets: Stats['sets'] = {
+    linked: links.oneDepositor,
+    'set-2': traced(SETS['set-2']),
+    'set-3-5': traced(SETS['set-3-5']),
+    'set-6-20': traced(SETS['set-6-20']),
+    'set-21': traced(SETS['set-21']),
+    pool: links.viaHub,
+  }
+  const months = all<Stats['months'][number]>(
+    db,
+    `select strftime('%Y-%m', t.time, 'unixepoch') month,
+       sum(${LINKS.linked}) linked, sum(${LINKS.pool}) pool,
+       sum(${LINKS.several}) several
+     from trace t where t.origin <> 'empty' group by month order by month`,
+  )
 
   const now = Math.floor(Date.now() / 1000)
   const delegations = all<{
@@ -176,6 +191,8 @@ export function deriveStats(db: Db): Stats {
     unwraps,
     balances,
     links,
+    sets,
+    months,
     readers: {
       delegations: live.length,
       delegates: new Set(live.map((d) => d.delegate)).size,

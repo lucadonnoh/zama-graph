@@ -8,12 +8,12 @@ import { Live } from './Live'
 import { Readers } from './Readers'
 import { home, parse } from './route'
 import { TxPage } from './TxPage'
-import { UnwrapPage } from './UnwrapPage'
+import { Loading } from './ui'
 
 /**
- * One page per kind of thing, chosen by the URL hash: the live view, an
- * address, an unwrap, a transaction, a ciphertext handle, who can read, and
- * how it works.
+ * One page per thing one can search for, chosen by the URL hash: the live
+ * view, an address, a transaction (with its unwraps), a ciphertext handle;
+ * and who can read, and how it works.
  */
 export function App() {
   const [route, setRoute] = useState(() => parse(location.hash))
@@ -116,7 +116,7 @@ export function App() {
       {route.page === 'live' && !offline && <Live filter={route.filter} />}
       {route.page === 'address' && <AddressPage address={route.value} />}
       {route.page === 'tx' && <TxPage hash={route.value} />}
-      {route.page === 'unwrap' && <UnwrapPage handle={route.value} />}
+      {route.page === 'unwrap' && <ToTx handle={route.value} />}
       {route.page === 'handle' && <HandlePage handle={route.value} />}
       {route.page === 'readers' && <Readers />}
       {route.page === 'about' && <About status={status} />}
@@ -128,6 +128,15 @@ export function App() {
       </footer>
     </div>
   )
+}
+
+/** An unwrap is shown on the page of the transaction that requested it */
+function ToTx({ handle }: { handle: string }) {
+  const { data, error } = useApi(api.unwrap, handle)
+  useEffect(() => {
+    if (data) location.replace(`#tx/${data.tx}`)
+  }, [data])
+  return <Loading error={error} />
 }
 
 function SyncStatus({ status }: { status: Status }) {

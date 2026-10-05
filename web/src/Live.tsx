@@ -2,6 +2,7 @@ import { type ReactNode, useEffect, useRef, useState } from 'react'
 import type { LiveEvent, LiveFilter, Stats } from '../../src/graph/types'
 import { TRUST } from '../../src/protocol'
 import { api, useApi } from './api'
+import { MonthBars, SetBars } from './Charts'
 import { ago, pct, plural } from './format'
 import { labelOf, useLabels } from './labels'
 import { home, liveHref } from './route'
@@ -27,6 +28,13 @@ const FILTERS: Record<LiveFilter, [label: string, title: string]> = {
   other: ['linked to another', 'unwraps provably funded by one other address'],
   pool: ['via pool', 'unwraps partly funded through a pool'],
   several: ['several depositors', 'unwraps several depositors can have funded'],
+  'set-2': ['2 depositors', 'unwraps exactly two depositors can have funded'],
+  'set-3-5': ['3–5 depositors', 'unwraps 3 to 5 depositors can have funded'],
+  'set-6-20': ['6–20 depositors', 'unwraps 6 to 20 depositors can have funded'],
+  'set-21': [
+    '>20 depositors',
+    'unwraps more than 20 depositors can have funded',
+  ],
   pending: ['pending', 'unwraps never finalized'],
   router: [
     'vault revealed',
@@ -73,6 +81,12 @@ export function Live({ filter }: { filter: LiveFilter }) {
         </p>
       </div>
       {stats?.transfers && <Scoreboard s={stats} filter={filter} />}
+      {stats?.sets && stats.months && (
+        <div className="grid gap-3 md:grid-cols-2">
+          <SetBars sets={stats.sets} filter={filter} />
+          <MonthBars months={stats.months} filter={filter} />
+        </div>
+      )}
       {stats?.transfers && <ByToken s={stats} />}
       <section className="card scroll-mt-3 p-3" ref={ref}>
         <div className="mb-2 flex flex-wrap items-baseline gap-1 text-xs">
@@ -141,22 +155,13 @@ function Scoreboard({ s, filter }: { s: Stats; filter: LiveFilter }) {
       <Card
         title="Links"
         href="#linked"
-        on={on('linked', 'self', 'other', 'pool', 'several', 'named')}
+        on={on('linked', 'self', 'other', 'named')}
       >
         <Stat
           value={pct(l.oneDepositor, l.traced)}
           href="#linked"
           label={`of ${plural(l.traced, 'unwrap')} provably funded by one depositor`}
           mark
-        />
-        <Split
-          total={l.traced}
-          filter={filter}
-          parts={[
-            [l.oneDepositor, 'linked', 'var(--zama)', 'linked'],
-            [l.viaHub, 'via pool', 'var(--hub)', 'pool'],
-            [l.several, 'several', 'var(--axis)', 'several'],
-          ]}
         />
         <Facts>
           <li>
@@ -485,8 +490,7 @@ function Row({ e, now }: { e: LiveEvent; now: number }) {
     <tr
       className="cursor-pointer"
       onClick={() => {
-        location.hash =
-          e.kind === 'unwrap' ? `unwrap/${e.handle}` : `tx/${e.tx}`
+        location.hash = `tx/${e.tx}`
       }}
     >
       <td

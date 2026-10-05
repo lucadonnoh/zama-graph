@@ -1,7 +1,14 @@
 import { all, type Db, transaction } from '../db'
+import { wordBig } from '../eth/rpc'
 import { KNOWN, TOPICS } from '../protocol'
-import { ZERO } from './model'
+import { type Ledger, ZERO } from './model'
 import type { Mode } from './traces'
+
+/** Fields of a hub log: indexed topics (topic0 apart) and data words */
+export const topicNum = (t: string | undefined) =>
+  Number(wordBig((t ?? '').slice(2)))
+export const topicAddr = (t: string | undefined) => `0x${(t ?? '').slice(26)}`
+export const words = (data: string) => data.slice(2).match(/.{64}/g) ?? []
 
 /**
  * A contract with this many counterparties pools the funds of unrelated
@@ -55,9 +62,9 @@ export interface Pools {
   member(pool: string, token: string, account: string): boolean
 }
 
-export function memberPools(db: Db): Pools {
-  // the wallets bids are paid into (and their verified name, where known)
-  const auction = new Set(
+/** The wallets the ZAMA auction's bids are paid into */
+function auctionWallets(db: Db): Set<string> {
+  return new Set(
     all<{ address: string }>(
       db,
       `select address from account where kind = 'contract' and name = 'AuctionWallet'
@@ -68,6 +75,10 @@ export function memberPools(db: Db): Pools {
       ZERO,
     ).map((r) => r.address),
   )
+}
+
+export function memberPools(db: Db): Pools {
+  const auction = auctionWallets(db)
   const batchers = new Map<string, { token: string; excluded: Set<string> }>()
   for (const b of all<{ address: string }>(
     db,
@@ -104,6 +115,137 @@ export function memberPools(db: Db): Pools {
       return !!b && b.token === token && !b.excluded.has(account)
     },
   }
+}
+
+/**
+ * A payout of a pool that only returns a member its own funds, and the
+ * payments into the pool that funded it. The payout is at most what they
+ * paid, times `num / den`.
+ */
+export interface Return {
+  pool: string
+  /** event indices of the payments, in time order */
+  legs: number[]
+  num: bigint
+  den: bigint
+  /** vault batchers: the batch */
+  batch?: number
+}
+
+/** Event index of a payout -> what paid for it */
+export type Returns = Map<number, Return>
+
+/** A batch's exchange rate has 6 decimals (BatcherConfidential.exchangeRateDecimals) */
+const RATE_ONE = 1_000_000n
+
+/**
+ * The payouts of member pools, each tied to the payments it returns
+ * (BatcherConfidential.sol, VaultBatcherConfidential.sol, AuctionToken):
+ *
+ * - a batch claim pays a member `deposit × rate / 10^6` in the batcher's
+ *   other token, its deposit being the sum of its joins in that batch;
+ *   `join(beneficiary, …)` pulls from the caller (the vault router, or the
+ *   member itself), so a join's payment is the one transfer into the
+ *   batcher in the transaction of its `Joined`;
+ * - a quit, or a recover from a canceled batch, returns the member's
+ *   deposit in the token it joined with;
+ * - a join through `transferAndCall` that joined nothing is sent back to
+ *   its payer in the same transaction (ERC7984 refunds what the receiver's
+ *   callback did not take);
+ * - an auction wallet refunds a bidder no more than its own bids paid in;
+ *   what a wallet sends to an account that never paid it (the proceeds to
+ *   the treasury) is no return.
+ */
+export function poolReturns(db: Db, ledger: Ledger): Returns {
+  const out: Returns = new Map()
+  const byTx = new Map<number, number[]>()
+  for (const e of ledger.events) {
+    const list = byTx.get(e.tx)
+    if (list) list.push(e.i)
+    else byTx.set(e.tx, [e.i])
+  }
+  const legsIn = (
+    tx: number,
+    f: (e: (typeof ledger.events)[number]) => boolean,
+  ) =>
+    (byTx.get(tx) ?? []).filter((i) => {
+      const e = ledger.events[i]
+      return !!e && f(e)
+    })
+
+  const logs = all<{
+    address: string
+    topic0: string
+    topics: string
+    data: string
+    tx: number
+  }>(
+    db,
+    `select address, topic0, topics, data, tx from hub_log
+     where address in (select address from hub where kind = 'batcher')
+     order by block, log`,
+  )
+  // a member's joins and each batch's rate, then the payouts they fund
+  const joins = new Map<string, number[]>()
+  const rates = new Map<string, bigint>()
+  for (const l of logs) {
+    const t = l.topics.split(',')
+    const batch = `${l.address}:${topicNum(t[0])}`
+    if (l.topic0 === TOPICS.Joined) {
+      const key = `${batch}:${topicAddr(t[1])}`
+      const paid = legsIn(l.tx, (e) => e.dst === l.address && e.src !== ZERO)
+      joins.set(key, [...(joins.get(key) ?? []), ...paid])
+      for (const o of paid) {
+        const payer = ledger.events[o]?.src
+        for (const i of legsIn(
+          l.tx,
+          (e) => e.i > o && e.src === l.address && e.dst === payer,
+        )) {
+          out.set(i, { pool: l.address, legs: [o], num: 1n, den: 1n })
+        }
+      }
+    } else if (l.topic0 === TOPICS.BatchFinalized) {
+      rates.set(batch, wordBig(words(l.data)[0] ?? ''))
+    }
+  }
+  for (const l of logs) {
+    const t = l.topics.split(',')
+    const id = topicNum(t[0])
+    const batch = `${l.address}:${id}`
+    const account = topicAddr(t[1])
+    const claim = l.topic0 === TOPICS.Claimed
+    if (!claim && l.topic0 !== TOPICS.Quit) continue
+    const num = claim ? rates.get(batch) : 1n
+    if (num === undefined) continue
+    const legs = joins.get(`${batch}:${account}`) ?? []
+    for (const i of legsIn(
+      l.tx,
+      (e) => e.src === l.address && e.dst === account,
+    )) {
+      out.set(i, {
+        pool: l.address,
+        legs: legs.filter((o) => o < i),
+        num,
+        den: claim ? RATE_ONE : 1n,
+        batch: id,
+      })
+    }
+  }
+
+  const auction = auctionWallets(db)
+  for (const e of ledger.events) {
+    if (!auction.has(e.src) || e.dst === ZERO) continue
+    const legs = (ledger.byAccount.get(`${e.token}:${e.dst}`) ?? []).filter(
+      (o) => {
+        const p = ledger.events[o]
+        return o < e.i && p?.src === e.dst && p.dst === e.src && p.hi > 0n
+      },
+    )
+    if (legs.length > 0) {
+      out.set(e.i, { pool: e.src, legs, num: 1n, den: 1n })
+    }
+  }
+  return out
 }
 
 /**

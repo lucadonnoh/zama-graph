@@ -15,6 +15,8 @@ function ledger(
     srcAfter?: [bigint, bigint]
     dstAfter?: [bigint, bigint]
     depositor?: string
+    /** another token than T */
+    token?: string
   }[],
   hubs: string[] = [],
 ): Ledger {
@@ -24,7 +26,7 @@ function ledger(
     log: 0,
     tx: i,
     time: 1000 + i,
-    token: T,
+    token: r.token ?? T,
     src: r.src,
     dst: r.dst,
     amount: 100 + i,
@@ -37,7 +39,8 @@ function ledger(
   for (const e of events) {
     for (const a of new Set([e.src, e.dst])) {
       if (a === ZERO) continue
-      byAccount.set(`${T}:${a}`, [...(byAccount.get(`${T}:${a}`) ?? []), e.i])
+      const key = `${e.token}:${a}`
+      byAccount.set(key, [...(byAccount.get(key) ?? []), e.i])
     }
   }
   const l: Ledger = {
@@ -53,7 +56,7 @@ function ledger(
       l.wraps.set(i, {
         block: e.block,
         log: 0,
-        token: T,
+        token: e.token,
         recipient: r.dst,
         depositor: r.depositor ?? r.dst,
         amount: r.lo,
@@ -63,7 +66,7 @@ function ledger(
     if (r.dst === ZERO) {
       l.unwraps.set(i, {
         handle: e.amount,
-        token: T,
+        token: e.token,
         burner: r.src,
         receiver: r.src,
         block: e.block,
@@ -159,7 +162,8 @@ describe('traceUnwrap', () => {
       ],
       [H],
     )
-    const t = traceUnwrap(l, 5, (a) => (a === H ? 'member' : 'enter'))
+    const returns = new Map([[4, { pool: H, legs: [3], num: 1n, den: 1n }]])
+    const t = traceUnwrap(l, 5, (a) => (a === H ? 'member' : 'enter'), returns)
     expect(t.origin).toEqual('deposit')
     // B's funds in the same wallet cannot be in A's refund
     expect(t.shares.map((s) => [s.depositor, s.min, s.max])).toEqual([
@@ -167,6 +171,52 @@ describe('traceUnwrap', () => {
     ])
     // as a plain pool the refund's origin is unknown
     const stop = traceUnwrap(l, 5, (a) => (a === H ? 'stop' : 'enter'))
+    expect(stop.origin).toEqual('hub')
+  })
+
+  it('follows a batch claim back to the join it converts', () => {
+    // A wraps 100 of token U and joins a batch with it; B joins with up to
+    // 500. The batch claims A 99 of T at rate 0.99, which A unwraps
+    const U = '0x00000000000000000000000000000000000000c1'
+    const l = ledger(
+      [
+        {
+          token: U,
+          src: ZERO,
+          dst: A,
+          lo: 100n,
+          hi: 100n,
+          dstAfter: [100n, 100n],
+        },
+        {
+          token: U,
+          src: ZERO,
+          dst: B,
+          lo: 500n,
+          hi: 500n,
+          dstAfter: [500n, 500n],
+        },
+        { token: U, src: A, dst: H, lo: 100n, hi: 100n, srcAfter: [0n, 0n] },
+        { token: U, src: B, dst: H, lo: 0n, hi: 500n, srcAfter: [0n, 500n] },
+        { src: H, dst: A, lo: 99n, hi: 99n, dstAfter: [99n, 99n] },
+        { src: A, dst: ZERO, lo: 99n, hi: 99n, srcAfter: [0n, 0n] },
+      ],
+      [H],
+    )
+    const claim = { pool: H, legs: [2], num: 990_000n, den: 1_000_000n }
+    const t = traceUnwrap(
+      l,
+      5,
+      (a) => (a === H ? 'member' : 'enter'),
+      new Map([[4, { ...claim, batch: 1 }]]),
+    )
+    // A's own wrap, in the other token, paid for all of it
+    expect(t.shares.map((s) => [s.depositor, s.min, s.max])).toEqual([
+      [A, 99n, 99n],
+    ])
+    expect(t.via).toEqual([H])
+    // without the claim's join the batcher is a stop
+    const stop = traceUnwrap(l, 5, (a) => (a === H ? 'member' : 'enter'))
     expect(stop.origin).toEqual('hub')
   })
 

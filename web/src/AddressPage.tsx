@@ -2,8 +2,10 @@ import { useMemo, useState } from 'react'
 import type { AddressEvent, AddressSummary } from '../../src/graph/types'
 import { WILDCARD } from '../../src/protocol'
 import { api, useApi } from './api'
+import { BalanceStrip } from './Charts'
 import { Linked, PartialLinks } from './Flow'
 import { day, plural } from './format'
+import { History } from './HistoryGraph'
 import { HubPanel } from './HubPanel'
 import { labelOf, useLabels } from './labels'
 import { nameOf, useNames } from './names'
@@ -35,6 +37,12 @@ function expiryText(expiry: string | null): string {
   const v = BigInt(expiry)
   return v > 10n ** 11n ? 'never' : day(Number(v))
 }
+
+/** Balance strips shown, and the newest steps each draws */
+const STRIPS = 6
+const STEPS = 400
+/** A ledger this short starts open */
+const OPEN = 12
 
 /** Rows of the ledger shown before "expand all" */
 const ROWS = 200
@@ -80,6 +88,7 @@ export function AddressPage({ address }: { address: string }) {
           <Balances s={s} />
         )}
       </section>
+      <History graph={s.graph} focus={address} />
       {a.token && <TokenPanel address={address} />}
       {a.kind === 'contract' && !a.token && <HubPanel address={address} />}
       <Links s={s} />
@@ -109,14 +118,23 @@ function Balances({ s }: { s: AddressSummary }) {
           ` · ${pinned}/${transfers.length} transfer amounts pinned`}
         {` · ${known}/${s.balances.length} balances known`}
       </div>
-      <div className="flex flex-wrap gap-x-5 gap-y-1">
-        {s.balances.map((b) => (
-          <span key={b.token}>
-            <span className="text-muted">{b.symbol} </span>
-            {b.balance ? <Amount a={b.balance} /> : <Muted>?</Muted>}
-          </span>
-        ))}
+      <div className="grid gap-x-6 gap-y-3 md:grid-cols-2">
+        {s.balances.slice(0, STRIPS).map((b) => {
+          const events = s.events.filter((e) => e.token === b.token)
+          return (
+            <div key={b.token} className="grid gap-1">
+              <div>
+                <span className="text-muted">{b.symbol} now </span>
+                {b.balance ? <Amount a={b.balance} /> : <Muted>?</Muted>}
+              </div>
+              <BalanceStrip events={events.slice(-STEPS)} />
+            </div>
+          )
+        })}
       </div>
+      {s.balances.length > STRIPS && (
+        <Muted>and {plural(s.balances.length - STRIPS, 'other token')}</Muted>
+      )}
     </div>
   )
 }
@@ -290,7 +308,13 @@ function Ledger({ s, address }: { s: AddressSummary; address: string }) {
   const events = s.events.filter((e) => !token || e.token === token).reverse()
   const [shown, more] = useExpand(events, ROWS)
   return (
-    <Section title="Ledger" note="newest first">
+    <details className="card p-3" open={s.events.length <= OPEN}>
+      <summary className="mb-2 text-sm">
+        <span className="font-semibold">Ledger</span>{' '}
+        <span className="text-xs text-muted">
+          {plural(s.events.length, 'event')}, newest first
+        </span>
+      </summary>
       {tokens.length > 1 && (
         <div className="mb-2 flex flex-wrap gap-1 text-xs">
           <button
@@ -370,7 +394,7 @@ function Ledger({ s, address }: { s: AddressSummary; address: string }) {
               </td>
               <td className="whitespace-nowrap text-right">
                 {e.kind === 'unwrap' ? (
-                  <a href={`#unwrap/${e.handle}`} title="where it came from">
+                  <a href={`#tx/${e.tx}`} title="where it came from">
                     <Amount a={e.amount} />
                   </a>
                 ) : (
@@ -394,6 +418,6 @@ function Ledger({ s, address }: { s: AddressSummary; address: string }) {
         </tbody>
       </table>
       {more}
-    </Section>
+    </details>
   )
 }

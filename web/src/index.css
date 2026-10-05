@@ -179,6 +179,56 @@ a.toggle:hover {
 .toggle:disabled {
   opacity: 0.5;
 }
+/* a horizontal bar per anonymity set size, each a link to its rows */
+a.set-row {
+  display: grid;
+  grid-template-columns: 2.5rem 1fr 3.5rem;
+  gap: 8px;
+  align-items: center;
+  border-radius: 4px;
+}
+a.set-row:hover {
+  background: var(--wash);
+  text-decoration: none;
+}
+a.set-row.on {
+  box-shadow: inset 2px 0 0 var(--mark-line);
+  color: var(--ink);
+}
+.set-bar {
+  display: block;
+  height: 8px;
+  min-width: 2px;
+  border-radius: 0 4px 4px 0;
+}
+/* columns per month, stacked from the baseline, a 2px gap between parts */
+.months {
+  display: flex;
+  gap: 6px;
+  font-size: 11px;
+  text-align: center;
+}
+.month {
+  flex: 1 1 0;
+  max-width: 56px;
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+.month-bar {
+  height: 96px;
+  display: flex;
+  flex-direction: column-reverse;
+  gap: 2px;
+}
+.month-bar > * {
+  display: block;
+  flex-basis: 0;
+  min-height: 2px;
+}
+.month-bar > :last-child {
+  border-radius: 4px 4px 0 0;
+}
 /* a scoreboard card whose rows the live view shows */
 .card.on {
   border-color: var(--mark-line);

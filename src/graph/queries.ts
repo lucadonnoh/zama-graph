@@ -11,7 +11,7 @@ import {
 } from '../protocol'
 import { ROUTER_LEGS, ROUTER_REVEALED } from './hubs'
 import { MAX64, NAMED, ZERO } from './model'
-import { LINKS } from './traces'
+import { LINKS, SETS } from './traces'
 import type {
   AccountInfo,
   AddressEvent,
@@ -174,6 +174,10 @@ const LIVE_WHERE: Record<LiveFilter, string> = {
   other: unwrapsWhere(LINKS.other),
   pool: unwrapsWhere(LINKS.pool),
   several: unwrapsWhere(LINKS.several),
+  'set-2': unwrapsWhere(SETS['set-2']),
+  'set-3-5': unwrapsWhere(SETS['set-3-5']),
+  'set-6-20': unwrapsWhere(SETS['set-6-20']),
+  'set-21': unwrapsWhere(SETS['set-21']),
   pending: `x.dst = '${ZERO}' and x.amount in (select handle from unwrap where fin_tx is null)`,
   pinned: `x.src <> '${ZERO}' and x.dst <> '${ZERO}'
     and x.amount in (select handle from bound where lo = hi)`,
@@ -911,6 +915,36 @@ export function txDetail(db: Db, hash: string): TxDetail | undefined {
   }
 }
 
+/**
+ * The withdrawals an address takes part in, newest first: its own, those
+ * its wraps can have funded, and the linked ones whose path goes through it
+ */
+export function unwrapsOf(db: Db, address: string, limit: number): string[] {
+  // the path tables come with the first derive
+  if (!one(db, "select 1 from sqlite_master where name = 'trace_account'")) {
+    return []
+  }
+  const rows = all<{ handle: number }>(
+    db,
+    `select handle from (
+       select handle, time from trace where burner = ?1 or receiver = ?1
+       union select t.handle, t.time from share s join trace t on t.handle = s.handle
+         where s.depositor = ?1
+       union select t.handle, t.time from trace_account a join trace t on t.handle = a.handle
+         where a.account = ?1
+     ) where handle in (select handle from trace where origin <> 'empty')
+     order by time desc limit ?2`,
+    address,
+    limit,
+  )
+  return [
+    ...hexOf(
+      db,
+      rows.map((r) => r.handle),
+    ).values(),
+  ]
+}
+
 /** Rows of linked unwraps shown on a page */
 const LINKED_ROWS = 40
 
@@ -949,9 +983,11 @@ function linkedUnwraps(
     burner: string
     receiver: string
     via: string | null
+    tx: string
   }>(
     db,
-    `select t.handle, t.token, t.lo, t.time, t.sender, t.burner, t.receiver, t.via
+    `select t.handle, t.token, t.lo, t.time, t.sender, t.burner, t.receiver, t.via,
+       (select x.hash from unwrap u join txn x on x.id = u.tx where u.handle = t.handle) tx
      from trace t where ${linked} order by t.time desc limit ${LINKED_ROWS}`,
     subject,
   )
@@ -964,6 +1000,7 @@ function linkedUnwraps(
     total,
     rows: rows.map((r) => ({
       handle: hex.get(r.handle) ?? '',
+      tx: r.tx,
       token: r.token,
       symbol: sym.get(r.token) ?? '?',
       amount: r.lo,
