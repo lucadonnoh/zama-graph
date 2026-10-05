@@ -1,6 +1,4 @@
-import { useEffect, useState } from 'react'
-import type { TokenDetail } from '../../src/graph/types'
-import { api } from './api'
+import { api, useApi } from './api'
 import { plural, units } from './format'
 import { Amount, Handle, Muted, Section } from './ui'
 
@@ -9,13 +7,7 @@ import { Amount, Handle, Muted, Section } from './ui'
  * supply, which the token keeps encrypted and the public data pins anyway
  */
 export function TokenPanel({ address }: { address: string }) {
-  const [d, setD] = useState<TokenDetail>()
-  useEffect(() => {
-    api
-      .token(address)
-      .then(setD)
-      .catch(() => undefined)
-  }, [address])
+  const { data: d } = useApi(api.token, address)
   if (!d) return null
   const t = d.token
   const width =

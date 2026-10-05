@@ -238,6 +238,26 @@ export interface Trace {
   txs: number[]
 }
 
+const LINKED = "(t.sender_min = t.lo and t.lo <> '0')"
+
+/**
+ * Withdrawals by what the public data proves about their funds, as
+ * conditions on the table `trace t`. The scoreboard counts them, the live
+ * view and the pages list them, so the numbers and the rows agree.
+ */
+export const LINKS = {
+  /** all of it provably came from one depositor (see `linked`) */
+  linked: LINKED,
+  /** that depositor is the withdrawing address itself */
+  self: `(${LINKED} and t.sender in (t.burner, t.receiver))`,
+  /** that depositor is another address */
+  other: `(${LINKED} and t.sender not in (t.burner, t.receiver))`,
+  /** not linked, and partly funded through a pool */
+  pool: `(t.origin = 'hub' and not ifnull(${LINKED}, 0))`,
+  /** not linked, and several depositors can have funded it */
+  several: `(t.origin not in ('hub', 'empty') and not ifnull(${LINKED}, 0))`,
+}
+
 /** Whether all of a withdrawal provably came from one depositor */
 export function linked(t: Trace): boolean {
   const top = t.shares[0]

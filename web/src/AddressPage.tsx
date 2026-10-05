@@ -1,14 +1,26 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import type { AddressEvent, AddressSummary } from '../../src/graph/types'
 import { WILDCARD } from '../../src/protocol'
-import { api } from './api'
+import { api, useApi } from './api'
+import { Linked, PartialLinks } from './Flow'
 import { day, plural } from './format'
 import { HubPanel } from './HubPanel'
-import { Linked, PartialLinks } from './LinkFlow'
 import { labelOf, useLabels } from './labels'
 import { nameOf, useNames } from './names'
 import { TokenPanel } from './TokenPanel'
-import { Address, Amount, ExplorerLink, Muted, Section, Time, Tx } from './ui'
+import {
+  Address,
+  Amount,
+  ExplorerLink,
+  exact,
+  Kind,
+  Loading,
+  Muted,
+  Section,
+  Time,
+  Tx,
+  useExpand,
+} from './ui'
 
 const KIND_TEXT: Record<AddressEvent['kind'], string> = {
   wrap: 'wrap',
@@ -18,7 +30,7 @@ const KIND_TEXT: Record<AddressEvent['kind'], string> = {
 }
 
 /** A delegation's expiry: a day, or never for uint64 max */
-export function expiryText(expiry: string | null): string {
+function expiryText(expiry: string | null): string {
   if (expiry === null) return '–'
   const v = BigInt(expiry)
   return v > 10n ** 11n ? 'never' : day(Number(v))
@@ -28,21 +40,10 @@ export function expiryText(expiry: string | null): string {
 const ROWS = 200
 
 export function AddressPage({ address }: { address: string }) {
-  const [s, setS] = useState<AddressSummary>()
-  const [error, setError] = useState<string>()
+  const { data: s, error } = useApi(api.address, address)
   useLabels()
   const names = useNames([address])
-  useEffect(() => {
-    setS(undefined)
-    setError(undefined)
-    api
-      .address(address)
-      .then(setS)
-      .catch((e: unknown) => setError(String(e)))
-  }, [address])
-
-  if (error) return <Muted>{error}</Muted>
-  if (!s) return <Muted>Loading…</Muted>
+  if (!s) return <Loading error={error} />
   const label = labelOf(address)
   const name = nameOf(names, address)
   const a = s.account
@@ -61,7 +62,7 @@ export function AddressPage({ address }: { address: string }) {
             </span>
           )}
           {label && <Address address={address} plain />}
-          <span className="text-xs" style={{ color: 'var(--muted)' }}>
+          <span className="text-xs text-muted">
             {a.kind === 'delegated'
               ? `EIP-7702 account, code of ${a.delegate}`
               : a.kind === 'contract'
@@ -89,8 +90,6 @@ export function AddressPage({ address }: { address: string }) {
 }
 
 function Balances({ s }: { s: AddressSummary }) {
-  const exact = (a: AddressSummary['events'][number]['amount']) =>
-    a.hi !== undefined && a.lo === a.hi
   const transfers = s.events.filter((e) => e.kind === 'in' || e.kind === 'out')
   const pinned = transfers.filter((e) => exact(e.amount)).length
   const boundary = s.events.filter(
@@ -101,7 +100,7 @@ function Balances({ s }: { s: AddressSummary }) {
   const parties = new Set(transfers.map((e) => e.counterparty)).size
   return (
     <div className="grid gap-1 text-sm">
-      <div className="text-xs" style={{ color: 'var(--ink-2)' }}>
+      <div className="text-xs text-ink-2">
         {plural(s.events.length, 'public event')} ·{' '}
         {plural(parties, 'counterparty', 'counterparties')}
         {boundary.length > 0 &&
@@ -113,7 +112,7 @@ function Balances({ s }: { s: AddressSummary }) {
       <div className="flex flex-wrap gap-x-5 gap-y-1">
         {s.balances.map((b) => (
           <span key={b.token}>
-            <span style={{ color: 'var(--muted)' }}>{b.symbol} </span>
+            <span className="text-muted">{b.symbol} </span>
             {b.balance ? <Amount a={b.balance} /> : <Muted>?</Muted>}
           </span>
         ))}
@@ -211,25 +210,25 @@ function ReadersOf({ s }: { s: AddressSummary }) {
         )}
         {s.userDecryptions.length > 0 && (
           <details>
-            <summary className="text-xs" style={{ color: 'var(--ink-2)' }}>
+            <summary className="text-xs text-ink-2">
               {plural(s.reads.requests, 'decryption request')}
               {s.reads.requests > s.userDecryptions.length &&
                 ` (latest ${s.userDecryptions.length})`}
             </summary>
-            <table className="stack mt-1 w-full text-left text-xs">
+            <table className="stack mt-1">
               <tbody>
                 {s.userDecryptions.map((u) => (
-                  <tr key={u.id} className="hairline border-t">
-                    <td className="py-1">
+                  <tr key={u.id}>
+                    <td>
                       <Time t={u.time} />
                     </td>
                     <td
-                      className="mono py-1"
+                      className="mono"
                       title="digest of the public key: the same key links sessions"
                     >
                       key {u.key.slice(0, 8)}
                     </td>
-                    <td className="py-1 wide">
+                    <td className="wide">
                       {u.known.length === 0
                         ? plural(u.handles.length, 'handle')
                         : u.known.map((k) => (
@@ -288,9 +287,8 @@ function Ledger({ s, address }: { s: AddressSummary; address: string }) {
     [s],
   )
   const [token, setToken] = useState<string>()
-  const [all, setAll] = useState(false)
   const events = s.events.filter((e) => !token || e.token === token).reverse()
-  const shown = all ? events : events.slice(0, ROWS)
+  const [shown, more] = useExpand(events, ROWS)
   return (
     <Section title="Ledger" note="newest first">
       {tokens.length > 1 && (
@@ -314,45 +312,31 @@ function Ledger({ s, address }: { s: AddressSummary; address: string }) {
           ))}
         </div>
       )}
-      <table className="stack w-full text-left text-xs">
-        <thead style={{ color: 'var(--muted)' }}>
+      <table className="stack">
+        <thead>
           <tr>
-            <th className="py-1 font-normal">Time</th>
-            <th className="py-1 font-normal">Event</th>
-            <th className="py-1 font-normal">Counterparty</th>
-            <th className="py-1 text-right font-normal">Amount</th>
-            <th className="py-1 text-right font-normal">Balance after</th>
-            <th className="py-1 font-normal">Tx</th>
+            <th>Time</th>
+            <th>Event</th>
+            <th>Counterparty</th>
+            <th className="text-right">Amount</th>
+            <th className="text-right">Balance after</th>
+            <th>Tx</th>
           </tr>
         </thead>
         <tbody>
           {shown.map((e) => (
-            <tr
-              key={`${e.block}:${e.log}:${e.kind}`}
-              className="row hairline border-t"
-            >
-              <td className="py-1">
+            <tr key={`${e.block}:${e.log}:${e.kind}`}>
+              <td>
                 <Time t={e.time} />
               </td>
-              <td className="whitespace-nowrap py-1">
-                <span
-                  className={
-                    e.kind === 'wrap'
-                      ? 'chip chip-deposit'
-                      : e.kind === 'unwrap'
-                        ? 'chip chip-withdrawal'
-                        : 'chip'
-                  }
-                >
-                  {KIND_TEXT[e.kind]}
-                </span>{' '}
+              <td className="whitespace-nowrap">
+                <Kind kind={e.kind} text={KIND_TEXT[e.kind]} />{' '}
                 <Muted>{e.symbol}</Muted>
                 {e.kind === 'unwrap' && e.finalized === false && (
                   <span className="chip chip-warning ml-1">pending</span>
                 )}
               </td>
               <td
-                className="py-1"
                 data-label={
                   e.kind === 'out' || e.kind === 'unwrap' ? 'to' : 'from'
                 }
@@ -384,7 +368,7 @@ function Ledger({ s, address }: { s: AddressSummary; address: string }) {
                   <Address address={e.counterparty} />
                 )}
               </td>
-              <td className="whitespace-nowrap py-1 text-right">
+              <td className="whitespace-nowrap text-right">
                 {e.kind === 'unwrap' ? (
                   <a href={`#unwrap/${e.handle}`} title="where it came from">
                     <Amount a={e.amount} />
@@ -395,32 +379,21 @@ function Ledger({ s, address }: { s: AddressSummary; address: string }) {
                   </a>
                 )}
               </td>
-              <td
-                className="whitespace-nowrap py-1 text-right"
-                data-label="balance"
-              >
+              <td className="whitespace-nowrap text-right" data-label="balance">
                 {e.balance && e.balanceHandle ? (
                   <a href={`#handle/${e.balanceHandle}`}>
                     <Amount a={e.balance} />
                   </a>
                 ) : null}
               </td>
-              <td className="py-1">
+              <td>
                 <Tx hash={e.tx} />
               </td>
             </tr>
           ))}
         </tbody>
       </table>
-      {!all && events.length > ROWS && (
-        <button
-          type="button"
-          className="toggle mt-2 text-xs"
-          onClick={() => setAll(true)}
-        >
-          expand all {events.length}
-        </button>
-      )}
+      {more}
     </Section>
   )
 }

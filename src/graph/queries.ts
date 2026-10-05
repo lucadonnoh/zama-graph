@@ -9,7 +9,9 @@ import {
   TRUST,
   WILDCARD,
 } from '../protocol'
-import { MAX64, ZERO } from './model'
+import { ROUTER_LEGS, ROUTER_REVEALED } from './hubs'
+import { MAX64, NAMED, ZERO } from './model'
+import { LINKS } from './traces'
 import type {
   AccountInfo,
   AddressEvent,
@@ -20,6 +22,7 @@ import type {
   HandleDetail,
   LinkedUnwrap,
   LiveEvent,
+  LiveFilter,
   OpNode,
   ReadersSummary,
   Resolved,
@@ -159,29 +162,29 @@ function traceSummary(row: {
   }
 }
 
-/**
- * The newest wraps, transfers and unwraps. `linked`: only unwraps whose
- * funds provably came from one depositor; `exact`: only transfers whose
- * hidden amount is pinned by the public data.
- */
-export function live(
-  db: Db,
-  filter: 'all' | 'linked' | 'exact' | 'unwraps' | 'named',
-  limit: number,
-): LiveEvent[] {
-  const where =
-    filter === 'linked'
-      ? `x.dst = '${ZERO}' and x.amount in (
-           select handle from trace t where t.sender_min = t.lo and t.lo <> '0')`
-      : filter === 'exact'
-        ? `x.src <> '${ZERO}' and x.dst <> '${ZERO}' and x.amount in (
-             select handle from bound where lo = hi)`
-        : filter === 'unwraps'
-          ? `x.dst = '${ZERO}'`
-          : filter === 'named'
-            ? `(x.src in (select address from name where ens is not null or gns is not null)
-                or x.dst in (select address from name where ens is not null or gns is not null))`
-            : '1'
+/** Unwraps whose trace meets a condition of `LINKS` */
+const unwrapsWhere = (link: string) =>
+  `x.dst = '${ZERO}' and x.amount in (select handle from trace t where ${link})`
+
+/** The rows behind each number of the scoreboard, as conditions on `xfer x` */
+const LIVE_WHERE: Record<LiveFilter, string> = {
+  all: '1',
+  linked: unwrapsWhere(LINKS.linked),
+  self: unwrapsWhere(LINKS.self),
+  other: unwrapsWhere(LINKS.other),
+  pool: unwrapsWhere(LINKS.pool),
+  several: unwrapsWhere(LINKS.several),
+  pending: `x.dst = '${ZERO}' and x.amount in (select handle from unwrap where fin_tx is null)`,
+  pinned: `x.src <> '${ZERO}' and x.dst <> '${ZERO}'
+    and x.amount in (select handle from bound where lo = hi)`,
+  router: `${ROUTER_LEGS} and x.tx in (${ROUTER_REVEALED})`,
+  unwraps: `x.dst = '${ZERO}'`,
+  named: `(x.src in (${NAMED}) or x.dst in (${NAMED}))`,
+}
+
+/** The newest wraps, transfers and unwraps, or those behind one number */
+export function live(db: Db, filter: LiveFilter, limit: number): LiveEvent[] {
+  const where = LIVE_WHERE[filter]
   const rows = all<{
     block: number
     log: number
@@ -930,7 +933,7 @@ function linkedUnwraps(
   if (!one(db, "select 1 from sqlite_master where name = 'trace_tx'")) {
     return { total: 0, rows: [] }
   }
-  const linked = `t.sender_min = t.lo and t.lo <> '0' and (${where})`
+  const linked = `${LINKS.linked} and (${where})`
   const total =
     one<{ n: number }>(
       db,

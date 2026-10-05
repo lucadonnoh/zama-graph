@@ -2,6 +2,9 @@ import { all, type Db } from '../db'
 
 export const ZERO = '0x0000000000000000000000000000000000000000'
 export const MAX64 = (1n << 64n) - 1n
+/** The accounts with a primary ENS or GNS name, as a subquery */
+export const NAMED =
+  'select address from name where ens is not null or gns is not null'
 
 /** One ConfidentialTransfer with what the bounds say about it */
 export interface Ev {

@@ -65,11 +65,16 @@ export function plural(n: number, word: string, words?: string): string {
   return `${n.toLocaleString('en-US')} ${n === 1 ? word : (words ?? `${word}s`)}`
 }
 
+/**
+ * A share, rounded down: what the data reveals is never shown larger than
+ * it is. Below 10% and above 99% with one decimal, never down to none.
+ */
 export function pct(part: number, whole: number): string {
   if (whole === 0) return '–'
   const p = (100 * part) / whole
-  // never round a part up to all of it, or down to none of it
-  if (part < whole && p > 99) return `${Math.min(p, 99.9).toFixed(1)}%`
-  if (part > 0 && p < 1) return `${Math.max(p, 0.1).toFixed(1)}%`
-  return `${p < 10 ? p.toFixed(1) : Math.round(p)}%`
+  const digits = p < 10 || (p > 99 && part < whole) ? 1 : 0
+  const f = 10 ** digits
+  // the epsilon keeps 92.0000 from flooring to 91 after division
+  const shown = Math.max(Math.floor(p * f + 1e-9) / f, part > 0 ? 0.1 : 0)
+  return `${shown.toFixed(digits)}%`
 }

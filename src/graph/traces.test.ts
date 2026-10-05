@@ -1,6 +1,7 @@
+import { DatabaseSync } from 'node:sqlite'
 import { expect } from 'earl'
 import { type Ev, type Ledger, ZERO } from './model'
-import { traceUnwrap } from './traces'
+import { LINKS, traceUnwrap } from './traces'
 
 const T = '0x00000000000000000000000000000000000000c0'
 
@@ -181,5 +182,45 @@ describe('traceUnwrap', () => {
     const t = traceUnwrap(l, 2, (a) => (a === H ? 'stop' : 'enter'))
     // the hub can have supplied at most 5 of the 90
     expect(t.shares[0]?.min).toEqual(85n)
+  })
+})
+
+describe('LINKS', () => {
+  it('sorts every traced withdrawal into exactly one kind', () => {
+    const db = new DatabaseSync(':memory:')
+    db.exec(`create table trace (
+      handle integer, burner text, receiver text, lo text,
+      origin text, sender text, sender_min text)`)
+    const ins = db.prepare('insert into trace values (?, ?, ?, ?, ?, ?, ?)')
+    const rows: [
+      string,
+      string,
+      string,
+      string,
+      string | null,
+      string | null,
+    ][] = [
+      // burner, receiver, lo, origin, sender, sender_min
+      [A, A, '5', 'deposit', A, '5'], // self
+      [A, B, '5', 'deposit', B, '5'], // self: the receiver's own wraps
+      [A, A, '5', 'deposit', B, '5'], // other
+      [A, A, '5', 'hub', B, '2'], // pool
+      [A, A, '5', 'hub', null, null], // pool, no depositor at all
+      [A, A, '5', 'several', B, '1'], // several
+      [A, A, '5', 'limit', null, null], // several: too large to walk
+      [A, A, '0', 'empty', null, null], // nothing to fund
+    ]
+    rows.forEach((r, i) => void ins.run(i, ...r))
+    const kind = (where: string) =>
+      (
+        db
+          .prepare(`select handle from trace t where ${where} order by handle`)
+          .all() as { handle: number }[]
+      ).map((r) => r.handle)
+    expect(kind(LINKS.self)).toEqual([0, 1])
+    expect(kind(LINKS.other)).toEqual([2])
+    expect(kind(LINKS.linked)).toEqual([0, 1, 2])
+    expect(kind(LINKS.pool)).toEqual([3, 4])
+    expect(kind(LINKS.several)).toEqual([5, 6])
   })
 })

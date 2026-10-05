@@ -1,32 +1,30 @@
 import { useEffect, useState } from 'react'
-import type { TxDetail, UnwrapDetail } from '../../src/graph/types'
-import { api } from './api'
+import type { UnwrapDetail } from '../../src/graph/types'
+import { api, useApi } from './api'
+import { Flow, Linked } from './Flow'
 import { plural } from './format'
 import { OpList } from './HandlePage'
-import { Linked } from './LinkFlow'
-import { Flow, History } from './UnwrapPage'
-import { Address, Amount, Handle, Muted, Section, Time, Tx } from './ui'
-
-const ZERO = '0x0000000000000000000000000000000000000000'
+import { History } from './HistoryGraph'
+import {
+  Address,
+  Amount,
+  Handle,
+  Kind,
+  Loading,
+  Section,
+  Time,
+  Tx,
+  ZERO,
+} from './ui'
 
 /**
  * One transaction: its confidential transfers, and the FHE program it ran,
  * operation by operation, with what the public data pins each result to
  */
 export function TxPage({ hash }: { hash: string }) {
-  const [d, setD] = useState<TxDetail>()
-  const [error, setError] = useState<string>()
-  useEffect(() => {
-    setD(undefined)
-    setError(undefined)
-    api
-      .tx(hash)
-      .then(setD)
-      .catch((e: unknown) => setError(String(e)))
-  }, [hash])
+  const { data: d, error } = useApi(api.tx, hash)
   const unwraps = useUnwraps(d?.unwraps ?? [])
-  if (error) return <Muted>{error}</Muted>
-  if (!d) return <Muted>Loading…</Muted>
+  if (!d) return <Loading error={error} />
   return (
     <>
       <section className="card grid gap-1 p-3">
@@ -37,7 +35,7 @@ export function TxPage({ hash }: { hash: string }) {
             label={<span className="break-all">0x{d.hash}</span>}
           />
         </div>
-        <div className="text-xs" style={{ color: 'var(--ink-2)' }}>
+        <div className="text-xs text-ink-2">
           <Time t={d.time} /> · block {d.block.toLocaleString('en-US')}
           {d.sender && (
             <>
@@ -66,44 +64,41 @@ export function TxPage({ hash }: { hash: string }) {
       />
       {d.transfers.length > 0 && (
         <Section title={plural(d.transfers.length, 'confidential transfer')}>
-          <table className="stack w-full text-left text-xs">
-            <thead style={{ color: 'var(--muted)' }}>
+          <table className="stack">
+            <thead>
               <tr>
-                <th className="py-1 font-normal">Token</th>
-                <th className="py-1 font-normal">From</th>
-                <th className="py-1 font-normal">To</th>
-                <th className="py-1 text-right font-normal">Amount</th>
-                <th className="py-1 font-normal">Handle</th>
+                <th>Token</th>
+                <th>From</th>
+                <th>To</th>
+                <th className="text-right">Amount</th>
+                <th>Handle</th>
               </tr>
             </thead>
             <tbody>
               {d.transfers.map((t) => (
-                <tr key={t.log} className="row hairline border-t">
-                  <td className="py-1">
-                    {t.symbol}{' '}
-                    {t.from === ZERO && (
-                      <span className="chip chip-deposit">wrap</span>
-                    )}
-                    {t.to === ZERO && (
-                      <span className="chip chip-withdrawal">unwrap</span>
-                    )}
+                <tr key={t.log}>
+                  <td>
+                    {t.symbol} {t.from === ZERO && <Kind kind="wrap" />}
+                    {t.to === ZERO && <Kind kind="unwrap" />}
                   </td>
-                  <td className="py-1" data-label="from">
+                  <td data-label="from">
                     <Address address={t.from} />
                   </td>
-                  <td className="py-1" data-label="to">
+                  <td data-label="to">
                     <Address address={t.to} />
                   </td>
-                  <td className="whitespace-nowrap py-1 text-right">
-                    {t.to === ZERO ? (
-                      <a href={`#unwrap/${t.handle}`}>
-                        <Amount a={t.amount} />
-                      </a>
-                    ) : (
+                  <td className="whitespace-nowrap text-right">
+                    <a
+                      href={
+                        t.to === ZERO
+                          ? `#unwrap/${t.handle}`
+                          : `#handle/${t.handle}`
+                      }
+                    >
                       <Amount a={t.amount} />
-                    )}
+                    </a>
                   </td>
-                  <td className="py-1">
+                  <td>
                     <Handle h={t.handle} />
                   </td>
                 </tr>

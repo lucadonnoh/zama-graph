@@ -1,9 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { HistoryGraph as Graph, HistoryNode } from '../../src/graph/types'
+import type {
+  HistoryGraph as Graph,
+  HistoryNode,
+  UnwrapDetail,
+} from '../../src/graph/types'
 import { compact, date, shortHex } from './format'
 import { labelOf, useLabels } from './labels'
 import { nameOf, useNames } from './names'
-import { visibility } from './ui'
+import { Section, visibility } from './ui'
 
 const W = 164
 const H = 34
@@ -16,6 +20,19 @@ const LEFT = 48
 const LANE = 4
 /** Graphs with more edges show amounts on hover only: they would overlap */
 const LABELS = 30
+
+/** Every transfer that can have funded a withdrawal, as a graph */
+export function History({ d }: { d: UnwrapDetail }) {
+  if (!d.graph || d.graph.edges.length <= 1) return null
+  return (
+    <Section
+      title="History"
+      note={`every transfer that can have funded it${d.graph.truncated ? ', newest part' : ''}`}
+    >
+      <HistoryGraph graph={d.graph} />
+    </Section>
+  )
+}
 
 interface Route {
   d: string

@@ -124,6 +124,28 @@ export interface TokenStats {
   holders: number
 }
 
+/**
+ * What the live view can be narrowed to, each a number on the scoreboard:
+ * unwraps by what the public data proves about their funds, unwraps never
+ * finalized, transfers whose amount it pins, router deposits that reveal
+ * their vault, and accounts with a name.
+ */
+export const LIVE_FILTERS = [
+  'all',
+  'linked',
+  'self',
+  'other',
+  'pool',
+  'several',
+  'pending',
+  'pinned',
+  'router',
+  'unwraps',
+  'named',
+] as const
+
+export type LiveFilter = (typeof LIVE_FILTERS)[number]
+
 export type LiveKind = 'wrap' | 'transfer' | 'unwrap'
 
 export interface LiveEvent {

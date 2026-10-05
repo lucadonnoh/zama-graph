@@ -1,17 +1,17 @@
-import { useEffect, useState } from 'react'
 import type { HandleDetail, OpNode } from '../../src/graph/types'
-import { api } from './api'
+import { api, useApi } from './api'
 import { gatewayTxUrl, shortHex, units } from './format'
-import { Address, Amount, Handle, Muted, Section, Time, Tx } from './ui'
-
-const SOURCE: Record<string, string> = {
-  wrap: 'Wrap event, in clear',
-  finalize: 'UnwrapFinalized, in clear',
-  gateway: 'Zama Gateway, public decryption result',
-  verified: 'PublicDecryptionVerified, in clear',
-  disclose: 'AmountDisclosed by its owner',
-  relayer: 'Zama relayer, asked by this tool',
-}
+import {
+  Address,
+  Amount,
+  Handle,
+  Loading,
+  Muted,
+  Section,
+  SOURCE,
+  Time,
+  Tx,
+} from './ui'
 
 /**
  * One ciphertext handle. Its 32 bytes are mostly a hash of the operation
@@ -20,18 +20,8 @@ const SOURCE: Record<string, string> = {
  * somebody decrypted.
  */
 export function HandlePage({ handle }: { handle: string }) {
-  const [d, setD] = useState<HandleDetail>()
-  const [error, setError] = useState<string>()
-  useEffect(() => {
-    setD(undefined)
-    setError(undefined)
-    api
-      .handle(handle)
-      .then(setD)
-      .catch((e: unknown) => setError(String(e)))
-  }, [handle])
-  if (error) return <Muted>{error}</Muted>
-  if (!d) return <Muted>Loading…</Muted>
+  const { data: d, error } = useApi(api.handle, handle)
+  if (!d) return <Loading error={error} />
   return (
     <>
       <section className="card grid gap-2 p-3">
@@ -40,9 +30,9 @@ export function HandlePage({ handle }: { handle: string }) {
           <span className="font-semibold">
             <Amount a={d.amount} handle={d.handle} />
           </span>
-          {d.role && <span style={{ color: 'var(--ink-2)' }}>{d.role}</span>}
+          {d.role && <span className="text-ink-2">{d.role}</span>}
         </div>
-        <div className="grid gap-1 text-xs" style={{ color: 'var(--ink-2)' }}>
+        <div className="grid gap-1 text-xs text-ink-2">
           {d.clear.map((c) => (
             <div key={c.source}>
               {SOURCE[c.source] ?? c.source}:{' '}
@@ -90,24 +80,24 @@ export function HandlePage({ handle }: { handle: string }) {
       )}
       {d.gateway.length > 0 && (
         <Section title="Decryptions" note="on the Zama Gateway">
-          <table className="stack w-full text-left text-xs">
+          <table className="stack">
             <tbody>
               {d.gateway.map((g) => (
-                <tr key={g.id} className="hairline border-t">
-                  <td className="py-1">
+                <tr key={g.id}>
+                  <td>
                     <Time t={g.time} />
                   </td>
-                  <td className="py-1">
+                  <td>
                     <span className="chip">{g.kind}</span>
                   </td>
-                  <td className="py-1">
+                  <td>
                     {g.user ? (
                       <Address address={g.user} />
                     ) : (
                       <Muted>anyone</Muted>
                     )}
                   </td>
-                  <td className="py-1">
+                  <td>
                     <a
                       href={gatewayTxUrl(g.tx)}
                       target="_blank"
@@ -155,7 +145,7 @@ function Layout({ d }: { d: HandleDetail }) {
           {hex}
         </span>
       ))}
-      <span className="ml-2" style={{ color: 'var(--muted)' }}>
+      <span className="ml-2 text-muted">
         {d.type}, {d.computed ? 'computed' : 'input'}, chain {d.chainId}
       </span>
     </div>
@@ -218,12 +208,12 @@ function withRoles(args: OpNode['args']) {
 
 export function OpList({ ops }: { ops: OpNode[] }) {
   return (
-    <table className="stack w-full text-left text-xs">
+    <table className="stack">
       <tbody>
         {ops.map((o) => (
-          <tr key={o.at} className="row hairline border-t">
-            <td className="mono py-1 font-semibold">{o.op}</td>
-            <td className="py-1 wide">
+          <tr key={o.at}>
+            <td className="mono font-semibold">{o.op}</td>
+            <td className="wide">
               {withRoles(o.args).map(({ a, role }) => (
                 <span key={role} className="mr-2">
                   {'handle' in a ? (
@@ -236,16 +226,14 @@ export function OpList({ ops }: { ops: OpNode[] }) {
               <Muted>→ </Muted>
               <Handle h={o.handle} />
             </td>
-            <td className="whitespace-nowrap py-1 text-right">
+            <td className="whitespace-nowrap text-right">
               <Amount a={o.amount} handle={o.handle} />
             </td>
-            <td className="py-1" style={{ color: 'var(--ink-2)' }}>
-              {o.role}
-            </td>
-            <td className="py-1">
+            <td className="text-ink-2">{o.role}</td>
+            <td>
               <Address address={o.caller} />
             </td>
-            <td className="py-1">
+            <td>
               <Tx hash={o.tx} />
             </td>
           </tr>

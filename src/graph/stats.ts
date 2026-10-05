@@ -1,6 +1,8 @@
 import { all, type Db, one, setSync } from '../db'
 import { WILDCARD } from '../protocol'
-import { MAX64, ZERO } from './model'
+import { ROUTER_LEGS, ROUTER_REVEALED } from './hubs'
+import { MAX64, NAMED, ZERO } from './model'
+import { LINKS } from './traces'
 import type { Stats, TokenStats } from './types'
 
 /**
@@ -109,23 +111,15 @@ export function deriveStats(db: Db): Stats {
     } else if (t) t.holders++
   }
 
-  const traced = all<{
-    origin: string
-    lo: string
-    sender: string | null
-    sender_min: string | null
-    burner: string
-    receiver: string
-  }>(db, 'select origin, lo, sender, sender_min, burner, receiver from trace')
-  const links = { traced: 0, oneDepositor: 0, self: 0, viaHub: 0, several: 0 }
-  for (const t of traced) {
-    if (t.origin === 'empty') continue
-    links.traced++
-    if (t.sender_min !== null && t.sender_min === t.lo && t.lo !== '0') {
-      links.oneDepositor++
-      if (t.sender === t.burner || t.sender === t.receiver) links.self++
-    } else if (t.origin === 'hub') links.viaHub++
-    else links.several++
+  const count = (sql: string) => one<{ n: number }>(db, sql)?.n ?? 0
+  const traced = (where: string) =>
+    count(`select count(*) n from trace t where ${where}`)
+  const links = {
+    traced: traced("t.origin <> 'empty'"),
+    oneDepositor: traced(LINKS.linked),
+    self: traced(LINKS.self),
+    viaHub: traced(LINKS.pool),
+    several: traced(LINKS.several),
   }
 
   const now = Math.floor(Date.now() / 1000)
@@ -145,35 +139,25 @@ export function deriveStats(db: Db): Stats {
   const live = [...active.values()].filter(
     (d) => d.expiry !== null && BigInt(d.expiry) > BigInt(now),
   )
-  const count = (sql: string) => one<{ n: number }>(db, sql)?.n ?? 0
   const routerTxs = all<{ legs: number; zero: number }>(
     db,
     `select count(*) legs, sum(b.lo = b.hi and b.lo = '0') zero from xfer x
      left join bound b on b.handle = x.amount
-     where x.src in (select address from hub where kind = 'router')
-       and x.dst in (select address from hub where kind = 'batcher')
+     where ${ROUTER_LEGS}
      group by x.tx`,
   )
   const router = {
     deposits: routerTxs.filter((t) => t.legs > 1).length,
-    revealed: routerTxs.filter((t) => t.legs > 1 && t.zero === t.legs - 1)
-      .length,
+    revealed: count(`select count(*) n from (${ROUTER_REVEALED})`),
     legs: routerTxs.reduce((a, t) => a + t.legs, 0),
     zero: routerTxs.reduce((a, t) => a + t.zero, 0),
   }
   const named = new Set(
-    all<{ address: string }>(
-      db,
-      'select address from name where ens is not null or gns is not null',
-    ).map((r) => r.address),
+    all<{ address: string }>(db, NAMED).map((r) => r.address),
   )
-  const namedLinked = traced.filter(
-    (t) =>
-      t.sender_min !== null &&
-      t.sender_min === t.lo &&
-      t.lo !== '0' &&
-      (named.has(t.burner) || named.has(t.receiver)),
-  ).length
+  const namedLinked = traced(
+    `${LINKS.linked} and (t.burner in (${NAMED}) or t.receiver in (${NAMED}))`,
+  )
   const namedExact = new Set(
     latest
       .filter(

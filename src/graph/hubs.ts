@@ -11,6 +11,23 @@ export const HUB_MIN_COUNTERPARTIES = 10
 
 export type HubKind = 'batcher' | 'router' | 'auction' | 'swap' | 'contract'
 
+/**
+ * The vault router's legs, as a condition on `xfer x`: it sends one to
+ * every vault's batcher to hide which one a user picked
+ */
+export const ROUTER_LEGS = `x.src in (select address from hub where kind = 'router')
+  and x.dst in (select address from hub where kind = 'batcher')`
+
+/**
+ * The router deposits whose legs are all provably zero but one, which
+ * makes the vault the user picked public, as a query for their tx ids
+ */
+export const ROUTER_REVEALED = `select x.tx from xfer x
+  left join bound b on b.handle = x.amount
+  where ${ROUTER_LEGS}
+  group by x.tx
+  having count(*) > 1 and sum(b.lo = b.hi and b.lo = '0') = count(*) - 1`
+
 export interface Hub {
   address: string
   kind: HubKind

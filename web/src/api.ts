@@ -1,8 +1,10 @@
+import { useEffect, useState } from 'react'
 import type {
   AddressSummary,
   HandleDetail,
   HubDetail,
   LiveEvent,
+  LiveFilter,
   Names,
   ReadersSummary,
   Resolved,
@@ -29,8 +31,6 @@ async function get<T>(path: string): Promise<T> {
   return (await res.json()) as T
 }
 
-export type LiveFilter = 'all' | 'exact' | 'linked' | 'unwraps' | 'named'
-
 export type Labels = Record<
   string,
   { label: string; kind?: string; zama?: boolean }
@@ -54,4 +54,27 @@ export const api = {
     for (const a of addresses) params.append('a', a)
     return get<Names>(`/api/names?${params}`)
   },
+}
+
+/**
+ * One answer of the API, e.g. `useApi(api.unwrap, handle)`: undefined while
+ * it loads, with the error if it failed, asked again when `arg` changes
+ */
+export function useApi<A, T>(
+  load: (arg: A) => Promise<T>,
+  arg: A,
+): { data?: T; error?: string } {
+  const [state, setState] = useState<{ arg: A; data?: T; error?: string }>()
+  useEffect(() => {
+    let cancelled = false
+    load(arg).then(
+      (data) => cancelled || setState({ arg, data }),
+      (e: unknown) => cancelled || setState({ arg, error: String(e) }),
+    )
+    return () => {
+      cancelled = true
+    }
+  }, [load, arg])
+  // an answer for an earlier argument belongs to another page
+  return state && Object.is(state.arg, arg) ? state : {}
 }

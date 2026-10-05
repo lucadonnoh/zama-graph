@@ -84,9 +84,6 @@ a:hover {
   border: 1px solid var(--border);
   border-radius: 8px;
 }
-.hairline {
-  border-color: var(--hairline);
-}
 input.search {
   background: var(--surface);
   border: 1px solid var(--axis);
@@ -99,7 +96,32 @@ input.search:focus {
   outline: 2px solid var(--mark-line);
   outline-offset: 1px;
 }
-.row:hover {
+/* every table: muted header, a hairline between rows */
+td + td,
+th + th {
+  padding-left: 12px;
+}
+table.stack {
+  width: 100%;
+  text-align: left;
+  font-size: 12px;
+  line-height: 16px;
+}
+table.stack thead {
+  color: var(--muted);
+}
+table.stack th {
+  font-weight: normal;
+}
+table.stack th,
+table.stack td {
+  padding-top: 4px;
+  padding-bottom: 4px;
+}
+table.stack tbody tr {
+  border-top: 1px solid var(--hairline);
+}
+table.stack tbody tr:hover {
   background: var(--wash);
 }
 .chip {
@@ -138,24 +160,40 @@ input.search:focus {
   border-color: var(--warning);
   color: var(--warning);
 }
-button.toggle {
+.toggle {
   border: 1px solid var(--axis);
   border-radius: 6px;
   padding: 2px 8px;
   color: var(--ink-2);
   background: transparent;
 }
-button.toggle.on {
+a.toggle:hover {
+  text-decoration: none;
+  border-color: var(--ink-2);
+}
+.toggle.on {
   color: var(--on-zama);
   background: var(--zama);
   border-color: var(--zama);
 }
-button.toggle:disabled {
+.toggle:disabled {
   opacity: 0.5;
 }
-.help {
-  cursor: help;
-  text-decoration: underline dotted;
+/* a scoreboard card whose rows the live view shows */
+.card.on {
+  border-color: var(--mark-line);
+}
+/* a number that leads to the rows behind it */
+a.evidence {
+  text-decoration: underline dotted var(--axis);
+  text-underline-offset: 3px;
+}
+a.evidence:hover {
+  text-decoration: underline;
+}
+a.evidence.on {
+  color: var(--ink);
+  text-decoration: underline solid var(--mark-line);
 }
 .amt-public {
   color: var(--public);
@@ -182,10 +220,6 @@ button.toggle:disabled {
   margin-right: 6px;
   vertical-align: 1px;
 }
-td + td,
-th + th {
-  padding-left: 12px;
-}
 .stat {
   display: grid;
   gap: 2px;
@@ -193,7 +227,6 @@ th + th {
 .stat-value {
   font-size: 22px;
   font-weight: 600;
-  font-variant-numeric: tabular-nums;
   line-height: 1.1;
 }
 mark {
@@ -225,28 +258,20 @@ mark {
   max-width: 72ch;
   line-height: 1.5;
 }
+/* parts of a whole, a 2px gap between them */
 .bar {
   height: 6px;
   border-radius: 3px;
   background: var(--wash);
   overflow: hidden;
   display: flex;
+  gap: 2px;
 }
-.bar > span {
+.bar > * {
   display: block;
   height: 100%;
-}
-.tooltip {
-  position: fixed;
-  pointer-events: none;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 6px 8px;
-  font-size: 12px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
-  z-index: 10;
-  max-width: 340px;
+  flex-basis: 0;
+  min-width: 0;
 }
 details > summary {
   cursor: pointer;

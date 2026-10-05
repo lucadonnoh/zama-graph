@@ -18,6 +18,7 @@ import {
   txDetail,
   unwrapDetail,
 } from './graph/queries'
+import { LIVE_FILTERS } from './graph/types'
 import { historyGraph } from './graph/view'
 import { log } from './log'
 
@@ -83,11 +84,8 @@ export function serve(db: Db, config: Config): void {
   app.get(
     '/api/live',
     cached(15, (req) => {
-      const f = String(req.query.filter ?? 'all')
-      const filter =
-        f === 'linked' || f === 'exact' || f === 'unwraps' || f === 'named'
-          ? f
-          : 'all'
+      const f = String(req.query.filter)
+      const filter = LIVE_FILTERS.find((x) => x === f) ?? 'all'
       return live(db, filter, LIVE_ROWS)
     }),
   )

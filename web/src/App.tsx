@@ -1,77 +1,40 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { Status } from '../../src/graph/types'
 import { About } from './About'
 import { AddressPage } from './AddressPage'
-import { api } from './api'
+import { api, useApi } from './api'
 import { HandlePage } from './HandlePage'
 import { Live } from './Live'
 import { Readers } from './Readers'
+import { home, parse } from './route'
 import { TxPage } from './TxPage'
 import { UnwrapPage } from './UnwrapPage'
 
-type Route =
-  | { page: 'live' }
-  | { page: 'address'; value: string }
-  | { page: 'tx'; value: string }
-  | { page: 'unwrap'; value: string }
-  | { page: 'handle'; value: string }
-  | { page: 'readers' }
-  | { page: 'about' }
-  | { page: 'search'; value: string }
-
-function parse(hash: string): Route {
-  const h = decodeURIComponent(hash.replace(/^#/, '')).trim().toLowerCase()
-  if (!h) return { page: 'live' }
-  if (/^0x[0-9a-f]{40}$/.test(h)) return { page: 'address', value: h }
-  const [kind, value = ''] = h.split('/')
-  const hex = value.replace(/^0x/, '')
-  if (kind === 'tx' && /^[0-9a-f]{64}$/.test(hex))
-    return { page: 'tx', value: hex }
-  if (kind === 'unwrap' && /^[0-9a-f]{64}$/.test(hex)) {
-    return { page: 'unwrap', value: hex }
-  }
-  if (kind === 'handle' && /^[0-9a-f]{64}$/.test(hex)) {
-    return { page: 'handle', value: hex }
-  }
-  if (h === 'readers') return { page: 'readers' }
-  if (h === 'about') return { page: 'about' }
-  return { page: 'search', value: h }
-}
-
-/** Back to the live view without reloading the page */
-function home(e: React.MouseEvent) {
-  e.preventDefault()
-  history.pushState(null, '', location.pathname)
-  window.dispatchEvent(new HashChangeEvent('hashchange'))
-}
-
 /**
- * One page per kind of thing, chosen by the URL hash so that every view
- * can be shared: the live view, an address, an unwrap, a transaction, a
- * ciphertext handle, who can read, and how it works.
+ * One page per kind of thing, chosen by the URL hash: the live view, an
+ * address, an unwrap, a transaction, a ciphertext handle, who can read, and
+ * how it works.
  */
 export function App() {
-  const [route, setRoute] = useState<Route>(() => parse(location.hash))
+  const [route, setRoute] = useState(() => parse(location.hash))
+  const current = useRef(route)
   const [input, setInput] = useState('')
-  const [status, setStatus] = useState<Status>()
-  const [offline, setOffline] = useState(false)
+  const { data: status, error: offline } = useApi(api.status, undefined)
   const [error, setError] = useState<string>()
 
   useEffect(() => {
     const onHash = () => {
-      setRoute(parse(location.hash))
+      const next = parse(location.hash)
+      // from one number of the live view to another: stay where the reader is
+      if (next.page !== 'live' || current.current.page !== 'live') {
+        window.scrollTo(0, 0)
+      }
+      current.current = next
+      setRoute(next)
       setError(undefined)
-      window.scrollTo(0, 0)
     }
     window.addEventListener('hashchange', onHash)
     return () => window.removeEventListener('hashchange', onHash)
-  }, [])
-
-  useEffect(() => {
-    api
-      .status()
-      .then(setStatus)
-      .catch(() => setOffline(true))
   }, [])
 
   // anything else typed in: an address, a tx or a handle the index knows
@@ -96,7 +59,7 @@ export function App() {
   const nav = (href: string, text: string, on: boolean) => (
     <a
       href={href}
-      style={on ? { color: 'var(--ink)' } : undefined}
+      className={on ? 'text-ink' : undefined}
       onClick={href === './' ? home : undefined}
     >
       {text}
@@ -129,10 +92,7 @@ export function App() {
           />
         </form>
         {status && <SyncStatus status={status} />}
-        <nav
-          className="flex gap-3 whitespace-nowrap text-xs"
-          style={{ color: 'var(--muted)' }}
-        >
+        <nav className="flex gap-3 whitespace-nowrap text-xs text-muted">
           {nav('./', 'live', route.page === 'live')}
           {nav('#readers', 'readers', route.page === 'readers')}
           {nav('#about', 'method', route.page === 'about')}
@@ -147,13 +107,13 @@ export function App() {
       </header>
 
       {offline && (
-        <div style={{ color: 'var(--negative)' }}>
+        <div className="text-negative">
           The indexer is offline right now. Try again in a few minutes.
         </div>
       )}
-      {error && <div style={{ color: 'var(--ink-2)' }}>{error}</div>}
+      {error && <div className="text-ink-2">{error}</div>}
 
-      {route.page === 'live' && !offline && <Live />}
+      {route.page === 'live' && !offline && <Live filter={route.filter} />}
       {route.page === 'address' && <AddressPage address={route.value} />}
       {route.page === 'tx' && <TxPage hash={route.value} />}
       {route.page === 'unwrap' && <UnwrapPage handle={route.value} />}
@@ -161,7 +121,7 @@ export function App() {
       {route.page === 'readers' && <Readers />}
       {route.page === 'about' && <About status={status} />}
 
-      <footer className="mt-6 text-xs" style={{ color: 'var(--muted)' }}>
+      <footer className="mt-6 text-xs text-muted">
         Derived from Ethereum and the Zama Gateway only.{' '}
         <span className="amt-derived">Highlighted</span> values were published
         by nobody: the public data allows no other.
@@ -173,8 +133,7 @@ export function App() {
 function SyncStatus({ status }: { status: Status }) {
   return (
     <div
-      className="hidden whitespace-nowrap text-xs lg:block"
-      style={{ color: 'var(--muted)' }}
+      className="hidden whitespace-nowrap text-xs text-muted lg:block"
       title="Last indexed Ethereum and Zama Gateway blocks"
     >
       eth {status.ethBlock?.toLocaleString('en-US') ?? '–'} · gateway{' '}

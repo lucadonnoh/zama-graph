@@ -1,35 +1,43 @@
-import type { ReactNode } from 'react'
+import { type ReactNode, useState } from 'react'
 import type { Amount as AmountT } from '../../src/graph/types'
 import { addressUrl, compact, date, shortHex, txUrl, units } from './format'
 import { labelOf, useLabels } from './labels'
 import { nameOf, useNames } from './names'
 
-const ZERO = '0x0000000000000000000000000000000000000000'
+export const ZERO = '0x0000000000000000000000000000000000000000'
 /** An upper bound this large says nothing a reader can use */
-const HUGE = 10n ** 15n
+export const HUGE = 10n ** 15n
+
+/** Whether the public data pins an amount to one value */
+export function exact(a: AmountT): boolean {
+  return a.hi !== undefined && a.lo === a.hi
+}
 
 /** How much the public data says about an amount, for styling and words */
 export type Visibility = 'public' | 'derived' | 'bounded' | 'hidden'
 
 export function visibility(a: AmountT): Visibility {
-  if (a.hi !== undefined && a.lo === a.hi) {
-    return a.source === 'inferred' ? 'derived' : 'public'
-  }
+  if (exact(a)) return a.source === 'inferred' ? 'derived' : 'public'
   if (a.hi !== undefined && BigInt(a.hi) < HUGE) return 'bounded'
   if (BigInt(a.lo) > 0n) return 'bounded'
   return 'hidden'
 }
 
-const SOURCE_TEXT: Record<string, string> = {
-  wrap: 'public: in clear in the Wrap event',
-  finalize: 'public: published by UnwrapFinalized',
-  gateway: 'public: decrypted by the KMS on the Zama Gateway',
-  verified: 'public: published with PublicDecryptionVerified',
-  disclose: 'public: disclosed by its owner',
+/** Who published an exact value */
+export const SOURCE: Record<string, string> = {
+  wrap: 'in clear in the Wrap event',
+  finalize: 'published by UnwrapFinalized',
+  gateway: 'decrypted by the KMS on the Zama Gateway',
+  verified: 'published with PublicDecryptionVerified',
+  disclose: 'disclosed by its owner',
   relayer:
-    'public: decrypted by the KMS on request, signatures checked against Ethereum',
-  inferred:
-    'pinned: published by nobody, but the only value the public data allows',
+    'decrypted by the KMS on request, signatures checked against Ethereum',
+}
+
+function sourceText(source = 'inferred'): string {
+  return source === 'inferred'
+    ? 'pinned: published by nobody, but the only value the public data allows'
+    : `public: ${SOURCE[source] ?? source}`
 }
 
 /**
@@ -51,27 +59,22 @@ export function Amount({
 }) {
   const v = visibility(a)
   if (handle && handle.slice(60, 62) === '00') {
-    const known = a.hi !== undefined && a.lo === a.hi
+    const known = exact(a)
     return (
       <span
         className={`mono amt-${known ? (a.source === 'inferred' ? 'derived' : 'public') : 'hidden'}`}
-        title={
-          known ? SOURCE_TEXT[a.source ?? 'inferred'] : 'an encrypted condition'
-        }
+        title={known ? sourceText(a.source) : 'an encrypted condition'}
       >
         {known ? (a.lo === '1' ? 'true' : 'false') : 'true or false'}
       </span>
     )
   }
   const fmt = short ? compact : units
-  const sym = symbol ? (
-    <span style={{ color: 'var(--muted)' }}> {symbol}</span>
-  ) : null
   let text: ReactNode
   let title: string
   if (v === 'public' || v === 'derived') {
     text = fmt(a.lo)
-    title = SOURCE_TEXT[a.source ?? 'inferred'] ?? ''
+    title = sourceText(a.source)
   } else if (v === 'bounded') {
     const lo = BigInt(a.lo)
     text =
@@ -88,7 +91,9 @@ export function Amount({
   return (
     <span className={`mono amt-${v}`} title={title}>
       {text}
-      {v !== 'hidden' && sym}
+      {v !== 'hidden' && symbol && (
+        <span className="text-muted"> {symbol}</span>
+      )}
     </span>
   )
 }
@@ -110,7 +115,7 @@ export function Address({
 }) {
   useLabels()
   const names = useNames(address === ZERO ? [] : [address])
-  if (address === ZERO) return <span style={{ color: 'var(--muted)' }}>–</span>
+  if (address === ZERO) return <span className="text-muted">–</span>
   const l = labelOf(address)
   const name = nameOf(names, address)
   const cls = l?.zama
@@ -151,7 +156,7 @@ export function ExplorerLink({ address }: { address: string }) {
       href={addressUrl(address)}
       target="_blank"
       rel="noreferrer"
-      style={{ color: 'var(--muted)' }}
+      className="text-muted"
       title="on Etherscan"
     >
       ↗
@@ -170,7 +175,7 @@ export function Tx({ hash, label }: { hash: string; label?: ReactNode }) {
         href={txUrl(hash)}
         target="_blank"
         rel="noreferrer"
-        style={{ color: 'var(--muted)' }}
+        className="text-muted"
         title="on Etherscan"
       >
         ↗
@@ -185,8 +190,7 @@ export function Handle({ h, chars = 4 }: { h: string; chars?: number }) {
   return (
     <a
       href={`#handle/${h}`}
-      className="mono"
-      style={{ color: 'var(--ink-2)' }}
+      className="mono text-ink-2"
       title={`handle 0x${h}`}
     >
       {shortHex(h, chars)}
@@ -202,6 +206,16 @@ export function Time({ t }: { t: number }) {
   )
 }
 
+const KIND_CHIP: Record<string, string> = {
+  wrap: 'chip chip-deposit',
+  unwrap: 'chip chip-withdrawal',
+}
+
+/** What an event is: a wrap (in), an unwrap (out), or a transfer */
+export function Kind({ kind, text }: { kind: string; text?: string }) {
+  return <span className={KIND_CHIP[kind] ?? 'chip'}>{text ?? kind}</span>
+}
+
 export function Section({
   title,
   note,
@@ -215,18 +229,67 @@ export function Section({
     <section className="card p-3">
       <div className="mb-2 flex flex-wrap items-baseline gap-x-3">
         <h2 className="font-semibold">{title}</h2>
-        {note && (
-          <span className="text-xs" style={{ color: 'var(--muted)' }}>
-            {note}
-          </span>
-        )}
+        {note && <span className="text-xs text-muted">{note}</span>}
       </div>
       {children}
     </section>
   )
 }
 
-/** Async data for a page, with its error */
 export function Muted({ children }: { children: ReactNode }) {
-  return <span style={{ color: 'var(--muted)' }}>{children}</span>
+  return <span className="text-muted">{children}</span>
+}
+
+/**
+ * Parts of a whole side by side, each as wide as its share. A part with no
+ * color is the track showing through; one with an href leads to its rows.
+ */
+export function Bar({
+  parts,
+}: {
+  parts: { n: number; color?: string; title?: string; href?: string }[]
+}) {
+  return (
+    <div className="bar">
+      {parts
+        .filter((p) => p.n > 0)
+        .map((p) => {
+          const key = `${p.color}:${p.title}`
+          const style = { flexGrow: p.n, background: p.color }
+          return p.href ? (
+            <a key={key} href={p.href} title={p.title} style={style}>
+              <span className="sr-only">{p.title}</span>
+            </a>
+          ) : (
+            <span key={key} title={p.title} style={style} />
+          )
+        })}
+    </div>
+  )
+}
+
+/** What a page shows until its data is there */
+export function Loading({ error }: { error?: string }) {
+  return <Muted>{error ?? 'Loading…'}</Muted>
+}
+
+/** The first `rows` of a list, and a button that shows the rest */
+export function useExpand<T>(
+  list: T[],
+  rows: number,
+  label = `expand all ${list.length}`,
+): [T[], ReactNode] {
+  const [all, setAll] = useState(false)
+  if (all || list.length <= rows) return [list, null]
+  return [
+    list.slice(0, rows),
+    <button
+      key="expand"
+      type="button"
+      className="toggle mt-2 text-xs"
+      onClick={() => setAll(true)}
+    >
+      {label}
+    </button>,
+  ]
 }

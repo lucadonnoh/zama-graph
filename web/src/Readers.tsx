@@ -1,8 +1,6 @@
-import { useEffect, useState } from 'react'
-import type { ReadersSummary } from '../../src/graph/types'
-import { api } from './api'
+import { api, useApi } from './api'
 import { day, plural } from './format'
-import { Address, Muted, Section } from './ui'
+import { Address, Loading, Muted, Section } from './ui'
 
 /** KMS operators, as Zama lists them (docs: protocol apps, operator staking) */
 const KMS_OPERATORS =
@@ -14,14 +12,8 @@ const KMS_OPERATORS =
  * token owner appoints. And who actually asks, from the Gateway's log.
  */
 export function Readers() {
-  const [r, setR] = useState<ReadersSummary>()
-  useEffect(() => {
-    api
-      .readers()
-      .then(setR)
-      .catch(() => undefined)
-  }, [])
-  if (!r) return <Muted>Loading…</Muted>
+  const { data: r, error } = useApi(api.readers, undefined)
+  if (!r) return <Loading error={error} />
   return (
     <>
       <Section title="KMS">
@@ -48,23 +40,23 @@ export function Readers() {
         {r.delegates.length === 0 ? (
           <Muted>No delegations.</Muted>
         ) : (
-          <table className="stack w-full text-left text-xs">
-            <thead style={{ color: 'var(--muted)' }}>
+          <table className="stack">
+            <thead>
               <tr>
-                <th className="py-1 font-normal">Delegate</th>
-                <th className="py-1 text-right font-normal">Accounts</th>
-                <th className="py-1 text-right font-normal">Contracts</th>
-                <th className="py-1 text-right font-normal">Active</th>
-                <th className="py-1 text-right font-normal">Wildcard</th>
-                <th className="py-1 font-normal">Since</th>
+                <th>Delegate</th>
+                <th className="text-right">Accounts</th>
+                <th className="text-right">Contracts</th>
+                <th className="text-right">Active</th>
+                <th className="text-right">Wildcard</th>
+                <th>Since</th>
                 <th
-                  className="py-1 text-right font-normal"
+                  className="text-right"
                   title="user decryption requests this address sent to the Gateway"
                 >
                   Decryptions
                 </th>
                 <th
-                  className="py-1 text-right font-normal"
+                  className="text-right"
                   title="accounts whose balance handles it asked the KMS to decrypt, from the Gateway's log"
                 >
                   Balances read
@@ -73,24 +65,20 @@ export function Readers() {
             </thead>
             <tbody>
               {r.delegates.map((d) => (
-                <tr key={d.delegate} className="row hairline border-t">
-                  <td className="py-1">
+                <tr key={d.delegate}>
+                  <td>
                     <Address address={d.delegate} />
                   </td>
-                  <td className="mono py-1 text-right">{d.delegators}</td>
-                  <td className="mono py-1 text-right">{d.contracts}</td>
-                  <td className="mono py-1 text-right">{d.active}</td>
-                  <td className="mono py-1 text-right">{d.wildcard || ''}</td>
-                  <td className="mono py-1">
+                  <td className="mono text-right">{d.delegators}</td>
+                  <td className="mono text-right">{d.contracts}</td>
+                  <td className="mono text-right">{d.active}</td>
+                  <td className="mono text-right">{d.wildcard || ''}</td>
+                  <td className="mono">
                     {day(d.first)}
                     {day(d.last) !== day(d.first) && ` – ${day(d.last)}`}
                   </td>
-                  <td className="mono py-1 text-right">
-                    {d.userDecryptions || ''}
-                  </td>
-                  <td className="mono py-1 text-right">
-                    {d.viewedAccounts || ''}
-                  </td>
+                  <td className="mono text-right">{d.userDecryptions || ''}</td>
+                  <td className="mono text-right">{d.viewedAccounts || ''}</td>
                 </tr>
               ))}
             </tbody>
@@ -117,40 +105,40 @@ export function Readers() {
         title="Requests"
         note="user decryptions on the Zama Gateway, a public chain"
       >
-        <table className="stack w-full text-left text-xs">
-          <thead style={{ color: 'var(--muted)' }}>
+        <table className="stack">
+          <thead>
             <tr>
-              <th className="py-1 font-normal">Address</th>
-              <th className="py-1 text-right font-normal">Requests</th>
-              <th className="py-1 text-right font-normal">Handles</th>
+              <th>Address</th>
+              <th className="text-right">Requests</th>
+              <th className="text-right">Handles</th>
               <th
-                className="py-1 text-right font-normal"
+                className="text-right"
                 title="distinct public keys: one key across requests links them"
               >
                 Keys
               </th>
-              <th className="py-1 font-normal">Last</th>
+              <th>Last</th>
             </tr>
           </thead>
           <tbody>
             {r.decryptors.map((d) => (
-              <tr key={d.user} className="row hairline border-t">
-                <td className="py-1">
+              <tr key={d.user}>
+                <td>
                   <Address address={d.user} />
                 </td>
-                <td className="mono py-1 text-right">
+                <td className="mono text-right">
                   {d.requests.toLocaleString('en-US')}
                 </td>
-                <td className="mono py-1 text-right">
+                <td className="mono text-right">
                   {d.handles.toLocaleString('en-US')}
                 </td>
-                <td className="mono py-1 text-right">{d.keys}</td>
-                <td className="mono py-1">{day(d.last)}</td>
+                <td className="mono text-right">{d.keys}</td>
+                <td className="mono">{day(d.last)}</td>
               </tr>
             ))}
           </tbody>
         </table>
-        <p className="mt-2 text-xs" style={{ color: 'var(--muted)' }}>
+        <p className="mt-2 text-xs text-muted">
           {plural(r.decryptors.length, 'busiest address', 'busiest addresses')}.
           Each request names who looked at which balance, and when.
         </p>
